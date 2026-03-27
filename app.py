@@ -40,7 +40,6 @@ warnings.filterwarnings("ignore")
 
 
 
-
 from src.processor import process_iris_file, consolidate_files, validate_structure
 from src.kpis import (
     calculate_all_kpis, kpis_por_mes, kpis_por_instrumento,
@@ -118,6 +117,7 @@ def init_session():
         "metadata_list": [],
         "archivos_cargados": [],
         "demo_loaded": False,
+        "registro_cargas": [],
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -238,7 +238,7 @@ def page_inicio():
     st.markdown("""
     <div class="main-header">
         <h1>🏥 Sistema de Análisis de Productividad APS</h1>
-        <p>Servicio de Salud Metropolitano Central · Atención Primaria de Salud · 2025</p>
+        <p>Servicio de Salud Metropolitano Central · Atención Primaria de Salud · 2026</p>
     </div>
     """, unsafe_allow_html=True)
 
@@ -270,7 +270,7 @@ def page_inicio():
     with col_carga:
         st.markdown("#### Cargar datos")
 
-        tab_upload, tab_demo = st.tabs(["📂 Subir archivo(s) IRIS", "🎲 Usar datos demo"])
+        tab_upload, tab_restore, tab_demo = st.tabs(["📂 Subir archivo(s) IRIS", "📥 Cargar datos guardados", "🎲 Usar datos demo"])
 
         with tab_upload:
             st.markdown("Sube uno o más archivos `.xlsx` exportados desde IRIS:")
@@ -313,15 +313,58 @@ def page_inicio():
                     progress.empty()
 
                     if dfs:
-                        df_final = consolidate_files(dfs)
+                        df_nuevos = consolidate_files(dfs)
+                        # Carga incremental: acumular sobre datos existentes
+                        if st.session_state.df is not None and not st.session_state.df.empty and not st.session_state.demo_loaded:
+                            df_final = consolidate_files([st.session_state.df, df_nuevos])
+                        else:
+                            df_final = df_nuevos
                         st.session_state.df = df_final
-                        st.session_state.metadata_list = meta_list
-                        st.session_state.archivos_cargados = [f.name for f in uploaded_files]
+                        st.session_state.metadata_list += meta_list
+                        st.session_state.archivos_cargados += [f.name for f in uploaded_files]
                         st.session_state.demo_loaded = False
-                        st.success(f"✅ {len(dfs)} archivo(s) procesados · **{len(df_final):,}** registros consolidados")
+                        from datetime import datetime as _dt
+                        for meta in meta_list:
+                            st.session_state.registro_cargas.append({
+                                "Archivo": meta.get("archivo", "—")[:45],
+                                "Centro": meta.get("establecimiento", "—")[:35],
+                                "Fecha desde": meta.get("fecha_desde", "—"),
+                                "Fecha hasta": meta.get("fecha_hasta", "—"),
+                                "Registros nuevos": len(df_nuevos),
+                                "Cargado el": _dt.now().strftime("%d/%m/%Y %H:%M"),
+                            })
+                        st.success(f"✅ {len(dfs)} archivo(s) procesados · **{len(df_nuevos):,}** nuevos registros · **{len(df_final):,}** registros acumulados en total")
 
                     for err in errores_globales:
                         st.warning(err)
+
+        with tab_restore:
+            st.markdown("Sube un archivo **`.csv`** descargado previamente desde esta app para continuar el análisis acumulado sin recargar los archivos IRIS originales:")
+            uploaded_csv = st.file_uploader(
+                "Datos consolidados guardados (.csv)",
+                type=["csv"],
+                label_visibility="collapsed",
+                key="restore_csv",
+            )
+            if uploaded_csv:
+                if st.button("📥 Restaurar datos guardados", type="primary", use_container_width=True):
+                    with st.spinner("Restaurando datos..."):
+                        df_rest = pd.read_csv(uploaded_csv)
+                        if st.session_state.df is not None and not st.session_state.df.empty and not st.session_state.demo_loaded:
+                            df_rest = consolidate_files([st.session_state.df, df_rest])
+                        st.session_state.df = df_rest
+                        st.session_state.demo_loaded = False
+                        from datetime import datetime as _dt
+                        st.session_state.registro_cargas.append({
+                            "Archivo": uploaded_csv.name[:45],
+                            "Centro": "Datos restaurados desde CSV",
+                            "Fecha desde": "—",
+                            "Fecha hasta": "—",
+                            "Registros nuevos": len(df_rest),
+                            "Cargado el": _dt.now().strftime("%d/%m/%Y %H:%M"),
+                        })
+                    st.success(f"✅ Datos restaurados · **{len(df_rest):,}** registros cargados")
+                    st.info("Navega al **Dashboard KPIs** en el menú lateral para ver los resultados.")
 
         with tab_demo:
             st.markdown("""
@@ -337,6 +380,29 @@ def page_inicio():
                     st.session_state.demo_loaded = True
                 st.success(f"✅ Demo cargado · **{len(df_demo):,}** registros · 7 CESFAM · 12 meses")
                 st.info("Navega al **Dashboard KPIs** en el menú lateral para ver los resultados.")
+
+    # ── Tabla de definiciones de indicadores ──
+    st.divider()
+    with st.expander("📖 Definición y fórmula de los 10 indicadores de productividad", expanded=False):
+        st.markdown("""
+        Referencia técnica para que cualquier persona de la audiencia pueda interpretar correctamente cada indicador.
+        """)
+        st.markdown("""
+| N° | Indicador | ¿Qué mide? | Fórmula de cálculo | Meta | Alerta |
+|----|-----------|-----------|-------------------|------|--------|
+| 1 | **Tasa de Ocupación** | % de cupos citados sobre el total de cupos disponibles para atención. Refleja qué tan bien se aprovechan las horas clínicas programadas. | Citados ÷ (Citados + Disponibles) × 100 | ≥ 65% | < 50% |
+| 2 | **Tasa de No-Show** | % de pacientes con cita confirmada que **no asistieron ni cancelaron**. El término "no-show" (no se presentó) implica un cupo perdido que no puede reasignarse a otro paciente a tiempo. | (Citados − Completados) ÷ Citados × 100 | ≤ 10% | > 15% |
+| 3 | **Tasa de Bloqueo** | % de cupos bloqueados administrativamente (vacaciones, capacitaciones, fallas de equipos, reuniones, etc.) sobre el total de cupos. Reducen la capacidad real de atención. | Bloqueados ÷ Total cupos × 100 | ≤ 10% | > 15% |
+| 4 | **Efectividad de Cita** | % de citas confirmadas que terminaron en atención efectiva. Refleja conjuntamente el impacto del no-show más las cancelaciones de último minuto. | Completados ÷ Citados × 100 | ≥ 88% | < 80% |
+| 5 | **Rendimiento Promedio** | Tiempo promedio en minutos por atención registrado en el sistema. Agendas muy cortas (< 10 min) sugieren riesgo de calidad; muy largas pueden indicar baja productividad. | Promedio de minutos por atención | Según instrumento | Desviación > 30% |
+| 6 | **Cupos Sobrecupo** | % de cupos en modalidad "sobrecupo" (cupos extra agregados fuera de la agenda regular). Un alto sobrecupo indica presión asistencial o subestimación de la demanda real. | Sobrecupos ÷ Total cupos × 100 | ≤ 5% | > 10% |
+| 7 | **Cobertura Sectorial** | % de registros de atención que tienen informado el sector territorial del paciente (Verde / Lila / Rojo). Mide la calidad del registro para análisis por territorio. | Con sector informado ÷ Total × 100 | ≥ 80% | < 60% |
+| 8 | **Agendamiento Remoto** | % de citas agendadas por vía remota (teléfono o telesalud). Un valor bajo indica que los pacientes deben concurrir presencialmente a agendar, lo que dificulta el acceso. | (Telefónico + Telesalud) ÷ Total × 100 | > 20% | < 5% |
+| 9 | **Variación Mensual de Ocupación** | Máximo cambio mes a mes en la tasa de ocupación (en puntos porcentuales). Detecta caídas o alzas bruscas que pueden indicar eventos críticos (paros, emergencias, cierres, etc.). | Máx \|Ocupación mes N − Ocupación mes N-1\| | ≤ 5 pp | > 10 pp |
+| 10 | **Ocupación Horario Extendido** | Tasa de ocupación en el horario extendido (≥ 18:00 hrs). Evalúa si los cupos de jornada extendida —que representan un costo adicional para el establecimiento— están siendo bien utilizados. | Citados ≥18h ÷ (Citados + Disponibles ≥18h) × 100 | ≥ 50% | < 30% |
+        """)
+        st.info("💡 **Semáforo:** 🟢 Verde = cumple la meta · 🟡 Amarillo = zona de observación · 🔴 Rojo = requiere intervención")
+        st.caption("Fuente: Modelo de análisis de productividad APS · Servicio de Salud Metropolitano Central · 2026")
 
     # ── Resumen de datos cargados ──
     if has_data():
@@ -367,6 +433,29 @@ def page_inicio():
             for a in archivos:
                 n = (df["_archivo"] == a).sum()
                 st.write(f"• {a[:40]} ({n:,} reg.)")
+            st.divider()
+            csv_bytes = df.to_csv(index=False).encode("utf-8")
+            st.download_button(
+                "💾 Descargar datos consolidados (.csv)",
+                data=csv_bytes,
+                file_name="datos_consolidados_aps.csv",
+                mime="text/csv",
+                use_container_width=True,
+                help="Guarda los datos acumulados. Re-súbelo en la próxima sesión usando la pestaña 'Cargar datos guardados' para continuar sin recargar los archivos IRIS.",
+            )
+            if st.button("🗑️ Limpiar todos los datos", type="secondary", use_container_width=True):
+                st.session_state.df = None
+                st.session_state.metadata_list = []
+                st.session_state.archivos_cargados = []
+                st.session_state.demo_loaded = False
+                st.session_state.registro_cargas = []
+                st.rerun()
+
+        if st.session_state.registro_cargas:
+            st.markdown("##### 📋 Registro de cargas (sesión actual)")
+            st.caption("Historial incremental de archivos procesados. La columna **'Fecha hasta'** indica el último período cargado por archivo; úsala para saber desde qué fecha debes generar el próximo reporte IRIS.")
+            df_reg = pd.DataFrame(st.session_state.registro_cargas)
+            st.dataframe(df_reg, use_container_width=True, hide_index=True)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -846,7 +935,7 @@ def main():
     st.sidebar.markdown("---")
     st.sidebar.caption(
         "Sistema de Análisis de Productividad APS · v1.0  \n"
-        "SSMC · Análisis de Datos con IA · 2025"
+        "SSMC · Modelo de Análisis de Productividad · 2026"
     )
 
 

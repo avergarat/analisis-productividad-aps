@@ -79,10 +79,24 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
     metadata["archivo"] = filename
 
     # 2. Leer datos (encabezados en fila 10, índice 9)
+    # Leemos solo las columnas necesarias para reducir uso de memoria
     try:
         if hasattr(file_obj, "seek"):
             file_obj.seek(0)
-        df = pd.read_excel(file_obj, header=9, engine="openpyxl")
+        # Primera pasada: leer solo encabezados para mapear columnas útiles
+        df_head = pd.read_excel(file_obj, header=9, nrows=0, engine="openpyxl")
+        all_cols = list(df_head.columns)
+        # Columnas que NO necesitamos (PII + redundantes)
+        _DROP_RAW = {
+            "NOMBRE", "NOMBRE SOCIAL", "NUMERO TIPO IDENTIFICACION",
+            "FECHA DE NACIMIENTO", "TELEFONOS", "DETALLE CUPO", "OBSERVACIONES",
+            "FUNCIONARIO CITADOR", "RUT PROFESIONAL", "PROFESIONAL",
+            "FUNCIONARIO REALIZA BLOQUEO", "TELECONSULTA",
+        }
+        usecols = [c for c in all_cols if _normalize_col_name(c) not in _DROP_RAW]
+        if hasattr(file_obj, "seek"):
+            file_obj.seek(0)
+        df = pd.read_excel(file_obj, header=9, engine="openpyxl", usecols=usecols)
     except Exception as e:
         return None, metadata, [f"Error al leer datos del archivo: {e}"]
 
@@ -90,10 +104,7 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
         return None, metadata, ["El archivo no contiene datos."]
 
     # 3. Normalizar nombres de columnas
-    col_map = {}
-    for col in df.columns:
-        norm = _normalize_col_name(col)
-        col_map[col] = norm
+    col_map = {col: _normalize_col_name(col) for col in df.columns}
     df = df.rename(columns=col_map)
 
     # 4. Renombrar RENDIMIMENTO (typo en IRIS) → RENDIMIENTO
@@ -105,7 +116,7 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
     if edad_col and edad_col != "EDAD_ANO":
         df = df.rename(columns={edad_col: "EDAD_ANO"})
 
-    # 6. Eliminar datos personales (PII)
+    # 6. Eliminar datos personales residuales (por si acaso)
     cols_to_drop = [c for c in df.columns if c in PII_COLUMNS]
     df = df.drop(columns=cols_to_drop, errors="ignore")
 
@@ -167,6 +178,20 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
     missing = REQUIRED_COLUMNS - set(df.columns)
     if missing:
         errors.append(f"Columnas requeridas no encontradas: {missing}")
+
+    # 12. Optimización de memoria: convertir columnas de baja cardinalidad a categorical
+    # Reduce uso de RAM ~60-70% en columnas string repetitivas
+    _CAT_COLS = [
+        "SS", "ESTABLECIMIENTO", "TIPO ATENCION", "INSTRUMENTO", "TIPO CUPO",
+        "ESTADO CUPO", "ESTADO CITA", "SECTOR", "TIPO DE AGENDAMIENTO",
+        "TRIMESTRE", "MES_NOMBRE", "HORARIO_EXTENDIDO", "AGENDAMIENTO_REMOTO",
+        "_archivo",
+    ]
+    import gc
+    for col in _CAT_COLS:
+        if col in df.columns:
+            df[col] = df[col].astype("category")
+    gc.collect()
 
     return df, metadata, errors
 

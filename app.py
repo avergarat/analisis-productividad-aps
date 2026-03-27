@@ -65,6 +65,7 @@ from src.charts import (
 )
 from src.demo_data import generate_demo_data, get_demo_metadata
 from src.storage import save_data, load_data, delete_data, github_configured, storage_status
+import gc
 
 # CSS personalizado
 st.markdown("""
@@ -340,14 +341,19 @@ def page_inicio():
                             meta_list.append(meta)
                         if errs:
                             errores_globales.extend([f"{uf.name}: {e}" for e in errs])
+                        del file_bytes
+                        gc.collect()  # liberar memoria entre archivos
 
                     progress.empty()
 
                     if dfs:
                         df_nuevos = consolidate_files(dfs)
+                        del dfs  # liberar lista de DataFrames intermedios
+                        gc.collect()
                         # Carga incremental: acumular sobre datos existentes
                         if st.session_state.df is not None and not st.session_state.df.empty and not st.session_state.demo_loaded:
                             df_final = consolidate_files([st.session_state.df, df_nuevos])
+                            del df_nuevos
                         else:
                             df_final = df_nuevos
                         st.session_state.df = df_final
@@ -469,7 +475,7 @@ def page_inicio():
         col1, col2 = st.columns([2, 1])
         with col1:
             fig_est = chart_estado_cupos(df)
-            st.plotly_chart(fig_est, use_container_width=True)
+            st.plotly_chart(fig_est)
         with col2:
             st.markdown("**Archivos procesados:**")
             archivos = df["_archivo"].unique()
@@ -583,7 +589,7 @@ def page_dashboard(dff: pd.DataFrame):
     with col_sector:
         st.markdown("#### Distribución Sectorial")
         fig_sec = chart_sector(dff)
-        st.plotly_chart(fig_sec, use_container_width=True)
+        st.plotly_chart(fig_sec)
 
     st.divider()
 
@@ -593,12 +599,12 @@ def page_dashboard(dff: pd.DataFrame):
         df_centros = kpis_por_centro(dff)
         if not df_centros.empty:
             fig_rank = chart_ranking_centros(df_centros)
-            st.plotly_chart(fig_rank, use_container_width=True)
+            st.plotly_chart(fig_rank)
     with col2:
         df_meses = kpis_por_mes(dff)
         if not df_meses.empty:
             fig_multi = chart_multi_kpi(df_meses)
-            st.plotly_chart(fig_multi, use_container_width=True)
+            st.plotly_chart(fig_multi)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -626,32 +632,32 @@ def page_evolucion(dff: pd.DataFrame):
     with col1:
         fig = chart_evolucion_mensual(df_meses, "ocupacion", "Tasa de Ocupación",
                                       umbral_ok=65, umbral_alerta=50)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig)
     with col2:
         fig = chart_noshow_vs_umbral(df_meses)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig)
 
     # Fila 2
     col3, col4 = st.columns(2)
     with col3:
         fig = chart_evolucion_mensual(df_meses, "bloqueo", "Tasa de Bloqueo",
                                       umbral_ok=10, umbral_alerta=15)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig)
     with col4:
         fig = chart_evolucion_mensual(df_meses, "efectividad", "Efectividad de Cita",
                                       umbral_ok=88, umbral_alerta=80)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig)
 
     # Fila 3
     col5, col6 = st.columns(2)
     with col5:
         fig = chart_evolucion_mensual(df_meses, "agendamiento_remoto", "Agendamiento Remoto",
                                       umbral_ok=20, umbral_alerta=5)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig)
     with col6:
         fig = chart_evolucion_mensual(df_meses, "cobertura_sectorial", "Cobertura Sectorial",
                                       umbral_ok=80, umbral_alerta=60)
-        st.plotly_chart(fig, use_container_width=True)
+        st.plotly_chart(fig)
 
     # Fila 4: Volumen mensual
     st.markdown("#### Volumen de Registros por Mes")
@@ -674,12 +680,12 @@ def page_evolucion(dff: pd.DataFrame):
             yaxis_title="Registros",
             margin=dict(l=40, r=20, t=50, b=40),
         )
-        st.plotly_chart(fig_vol, use_container_width=True)
+        st.plotly_chart(fig_vol)
     with col8:
         fig_rend = chart_evolucion_mensual(
             df_meses, "rendimiento", "Rendimiento Promedio", unidad=" min"
         )
-        st.plotly_chart(fig_rend, use_container_width=True)
+        st.plotly_chart(fig_rend)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -705,7 +711,7 @@ def page_analisis(dff: pd.DataFrame):
         col1, col2 = st.columns(2)
         with col1:
             fig_rend = chart_rendimiento_instrumento(dff)
-            st.plotly_chart(fig_rend, use_container_width=True)
+            st.plotly_chart(fig_rend)
         with col2:
             df_inst = kpis_por_instrumento(dff)
             if not df_inst.empty:
@@ -730,7 +736,7 @@ def page_analisis(dff: pd.DataFrame):
                     margin=dict(l=40, r=20, t=50, b=40),
                     xaxis=dict(range=[0, 105], title="Ocupación (%)"),
                 )
-                st.plotly_chart(fig_inst, use_container_width=True)
+                st.plotly_chart(fig_inst)
 
         # Tabla resumen por instrumento
         st.markdown("##### Tabla de KPIs por Instrumento")
@@ -748,7 +754,7 @@ def page_analisis(dff: pd.DataFrame):
         col1, col2 = st.columns(2)
         with col1:
             fig_ta = chart_tipo_atencion(dff, top_n=15)
-            st.plotly_chart(fig_ta, use_container_width=True)
+            st.plotly_chart(fig_ta)
         with col2:
             # No-show por tipo atención
             if "TIPO ATENCION" in dff.columns:
@@ -781,11 +787,11 @@ def page_analisis(dff: pd.DataFrame):
                     margin=dict(l=40, r=20, t=50, b=40),
                     xaxis_title="No-Show (%)",
                 )
-                st.plotly_chart(fig_ns, use_container_width=True)
+                st.plotly_chart(fig_ns)
 
     with sub_tab3:
         fig_heat = chart_heatmap_instrumento_mes(dff)
-        st.plotly_chart(fig_heat, use_container_width=True)
+        st.plotly_chart(fig_heat)
 
     with sub_tab4:
         if "GRUPO_ETARIO" in dff.columns:
@@ -809,7 +815,7 @@ def page_analisis(dff: pd.DataFrame):
                     yaxis_title="Registros",
                     margin=dict(l=40, r=20, t=50, b=40),
                 )
-                st.plotly_chart(fig_ge, use_container_width=True)
+                st.plotly_chart(fig_ge)
 
             with col2:
                 # Ocupación por grupo etario
@@ -840,7 +846,7 @@ def page_analisis(dff: pd.DataFrame):
                     yaxis_title="Ocupación (%)",
                     margin=dict(l=40, r=20, t=50, b=40),
                 )
-                st.plotly_chart(fig_ge2, use_container_width=True)
+                st.plotly_chart(fig_ge2)
         else:
             st.info("Columna de grupo etario no disponible en los datos cargados.")
 

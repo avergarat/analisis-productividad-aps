@@ -7,7 +7,39 @@ import pandas as pd
 import numpy as np
 from io import BytesIO
 import warnings
+
+# ─────────────────────────────────────────────────────────────
+# AUTENTICACIÓN SIMPLE POR CONTRASEÑA
+# ─────────────────────────────────────────────────────────────
+def check_password():
+    def password_entered():
+        if st.session_state["password"] == "salud2026":
+            st.session_state["password_correct"] = True
+            del st.session_state["password"]  # Borra la contraseña de la sesión
+        else:
+            st.session_state["password_correct"] = False
+
+    if "password_correct" not in st.session_state:
+        st.session_state["password_correct"] = False
+
+    if not st.session_state["password_correct"]:
+        st.title("🔒 Acceso restringido")
+        st.text_input(
+            "Ingresa la contraseña para acceder a la aplicación:",
+            type="password",
+            on_change=password_entered,
+            key="password"
+        )
+        if "password_correct" in st.session_state and not st.session_state["password_correct"]:
+            st.error("Contraseña incorrecta. Intenta nuevamente.")
+        st.stop()
+
+check_password()
+
 warnings.filterwarnings("ignore")
+
+
+
 
 from src.processor import process_iris_file, consolidate_files, validate_structure
 from src.kpis import (

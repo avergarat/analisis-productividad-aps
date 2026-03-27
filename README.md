@@ -78,4 +78,4 @@ Los siguientes campos se eliminan automáticamente al procesar:
 ---
 
 **Versión**: 1.0 · **Fecha**: Marzo 2026
-**Desarrollado por**: Análisis de Datos con IA — Servicio de Salud Metropolitano Central
+Desarrollado por: Modelo de Análisis de Productividad — Servicio de Salud Metropolitano Central

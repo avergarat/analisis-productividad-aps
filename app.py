@@ -1,0 +1,822 @@
+"""
+Sistema de Análisis de Productividad APS
+Servicio de Salud Metropolitano Central - Chile
+"""
+import streamlit as st
+import pandas as pd
+import numpy as np
+from io import BytesIO
+import warnings
+warnings.filterwarnings("ignore")
+
+from src.processor import process_iris_file, consolidate_files, validate_structure
+from src.kpis import (
+    calculate_all_kpis, kpis_por_mes, kpis_por_instrumento,
+    kpis_por_centro, detectar_alertas, KPI_DEFINITIONS
+)
+from src.charts import (
+    chart_ranking_centros, chart_evolucion_mensual, chart_heatmap_instrumento_mes,
+    chart_tipo_atencion, chart_sector, chart_noshow_vs_umbral,
+    chart_rendimiento_instrumento, chart_estado_cupos, chart_multi_kpi,
+    build_semaforo_table
+)
+from src.demo_data import generate_demo_data, get_demo_metadata
+
+# ─────────────────────────────────────────────────────────────
+# CONFIGURACIÓN DE PÁGINA
+# ─────────────────────────────────────────────────────────────
+st.set_page_config(
+    page_title="Productividad APS | SSMC",
+    page_icon="🏥",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# CSS personalizado
+st.markdown("""
+<style>
+    .main-header {
+        background: linear-gradient(135deg, #1B4F72 0%, #2E86C1 100%);
+        color: white;
+        padding: 1.2rem 1.5rem;
+        border-radius: 10px;
+        margin-bottom: 1.5rem;
+    }
+    .main-header h1 { color: white; margin: 0; font-size: 1.6rem; }
+    .main-header p { color: #AED6F1; margin: 0.2rem 0 0 0; font-size: 0.9rem; }
+
+    .kpi-card {
+        background: white;
+        border-radius: 10px;
+        padding: 1rem;
+        text-align: center;
+        border-left: 5px solid #2E86C1;
+        box-shadow: 0 2px 8px rgba(0,0,0,0.08);
+    }
+    .kpi-card.verde { border-left-color: #27AE60; }
+    .kpi-card.amarillo { border-left-color: #F39C12; }
+    .kpi-card.rojo { border-left-color: #E74C3C; }
+
+    .kpi-valor { font-size: 2rem; font-weight: 700; color: #1B4F72; }
+    .kpi-nombre { font-size: 0.8rem; color: #555; margin-top: 0.2rem; }
+
+    .alerta-rojo { background: #FDEDEC; border-left: 4px solid #E74C3C;
+                   padding: 0.7rem 1rem; border-radius: 5px; margin: 0.4rem 0; }
+    .alerta-amarillo { background: #FEF9E7; border-left: 4px solid #F39C12;
+                       padding: 0.7rem 1rem; border-radius: 5px; margin: 0.4rem 0; }
+
+    .metric-badge { display: inline-block; padding: 0.2rem 0.6rem; border-radius: 12px;
+                    font-size: 0.75rem; font-weight: 600; }
+    .badge-verde { background: #D5F5E3; color: #1E8449; }
+    .badge-amarillo { background: #FDEBD0; color: #9A7D0A; }
+    .badge-rojo { background: #FADBD8; color: #922B21; }
+
+    div[data-testid="stMetric"] { background: white; border-radius: 8px;
+                                   padding: 0.8rem; box-shadow: 0 1px 4px rgba(0,0,0,0.06); }
+</style>
+""", unsafe_allow_html=True)
+
+
+# ─────────────────────────────────────────────────────────────
+# SESSION STATE
+# ─────────────────────────────────────────────────────────────
+def init_session():
+    defaults = {
+        "df": None,
+        "metadata_list": [],
+        "archivos_cargados": [],
+        "demo_loaded": False,
+    }
+    for k, v in defaults.items():
+        if k not in st.session_state:
+            st.session_state[k] = v
+
+
+init_session()
+
+
+# ─────────────────────────────────────────────────────────────
+# HELPERS
+# ─────────────────────────────────────────────────────────────
+def has_data() -> bool:
+    return st.session_state.df is not None and not st.session_state.df.empty
+
+
+def apply_filters(df: pd.DataFrame, filtros: dict) -> pd.DataFrame:
+    dff = df.copy()
+    if filtros.get("centros"):
+        dff = dff[dff["ESTABLECIMIENTO"].isin(filtros["centros"])]
+    if filtros.get("meses"):
+        dff = dff[dff["MES_NUM"].isin(filtros["meses"])]
+    if filtros.get("instrumentos"):
+        dff = dff[dff["INSTRUMENTO"].isin(filtros["instrumentos"])]
+    if filtros.get("sectores"):
+        dff = dff[dff["SECTOR"].isin(filtros["sectores"])]
+    if filtros.get("tipos_atencion"):
+        dff = dff[dff["TIPO ATENCION"].isin(filtros["tipos_atencion"])]
+    if filtros.get("tipo_cupo"):
+        dff = dff[dff["TIPO CUPO"].isin(filtros["tipo_cupo"])]
+    return dff
+
+
+def semaforo_icon(s: str) -> str:
+    return {"verde": "🟢", "amarillo": "🟡", "rojo": "🔴", "gris": "⚪"}.get(s, "⚪")
+
+
+def kpi_delta(valor: float, umbral: float, mayor_mejor: bool) -> str:
+    diff = valor - umbral
+    if mayor_mejor:
+        return f"{diff:+.1f}pp vs meta"
+    else:
+        return f"{diff:+.1f}pp vs umbral"
+
+
+# ─────────────────────────────────────────────────────────────
+# SIDEBAR
+# ─────────────────────────────────────────────────────────────
+def render_sidebar() -> dict:
+    with st.sidebar:
+        st.markdown("### 🏥 SSMC · Productividad APS")
+        st.caption("Servicio de Salud Metropolitano Central")
+        st.divider()
+
+        # Navegación
+        nav = st.radio(
+            "Navegación",
+            ["🏠 Inicio y Carga", "📊 Dashboard KPIs", "📈 Evolución Temporal",
+             "🔍 Análisis Detallado", "⚠️ Alertas y Brechas"],
+            label_visibility="collapsed",
+        )
+        st.divider()
+
+        filtros = {}
+        if has_data():
+            df = st.session_state.df
+            st.markdown("**Filtros**")
+
+            # Centros
+            centros_disp = sorted(df["ESTABLECIMIENTO"].dropna().unique().tolist())
+            centros_sel = st.multiselect("Centro de Salud", centros_disp,
+                                          default=centros_disp, key="filt_centros")
+            filtros["centros"] = centros_sel if centros_sel else centros_disp
+
+            # Meses
+            meses_disp = sorted(df["MES_NUM"].dropna().unique().tolist())
+            MESES_N = {1:"Ene",2:"Feb",3:"Mar",4:"Abr",5:"May",6:"Jun",
+                       7:"Jul",8:"Ago",9:"Sep",10:"Oct",11:"Nov",12:"Dic"}
+            meses_labels = {m: f"{MESES_N.get(int(m), str(m))} ({int(m)})" for m in meses_disp}
+            meses_sel_labels = st.multiselect(
+                "Meses", options=list(meses_labels.values()),
+                default=list(meses_labels.values()), key="filt_meses"
+            )
+            meses_sel = [m for m, lbl in meses_labels.items() if lbl in meses_sel_labels]
+            filtros["meses"] = meses_sel if meses_sel else meses_disp
+
+            # Instrumento
+            inst_disp = sorted(df["INSTRUMENTO"].dropna().unique().tolist())
+            inst_sel = st.multiselect("Instrumento/Profesional", inst_disp,
+                                       default=inst_disp, key="filt_inst")
+            filtros["instrumentos"] = inst_sel if inst_sel else inst_disp
+
+            # Sector
+            sect_disp = sorted(df["SECTOR"].dropna().unique().tolist())
+            sect_sel = st.multiselect("Sector Territorial", sect_disp,
+                                       default=sect_disp, key="filt_sect")
+            filtros["sectores"] = sect_sel if sect_sel else sect_disp
+
+            # Tipo cupo
+            tc_disp = sorted(df["TIPO CUPO"].dropna().unique().tolist())
+            tc_sel = st.multiselect("Tipo Cupo", tc_disp,
+                                     default=tc_disp, key="filt_tc")
+            filtros["tipo_cupo"] = tc_sel if tc_sel else tc_disp
+
+            st.divider()
+            dff = apply_filters(df, filtros)
+            st.caption(f"📋 **{len(dff):,}** registros seleccionados")
+            if st.session_state.demo_loaded:
+                st.info("📊 Modo Demo activo", icon="ℹ️")
+
+        return nav, filtros
+
+
+# ─────────────────────────────────────────────────────────────
+# PÁGINA 1: INICIO Y CARGA
+# ─────────────────────────────────────────────────────────────
+def page_inicio():
+    st.markdown("""
+    <div class="main-header">
+        <h1>🏥 Sistema de Análisis de Productividad APS</h1>
+        <p>Servicio de Salud Metropolitano Central · Atención Primaria de Salud · 2025</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    col_info, col_carga = st.columns([1, 1], gap="large")
+
+    with col_info:
+        st.markdown("#### ¿Qué analiza este sistema?")
+        st.markdown("""
+        Consolida reportes **IRIS** de múltiples CESFAM y calcula automáticamente
+        **10 indicadores clave** de productividad según el modelo APS-SSMC:
+
+        | # | Indicador | Meta |
+        |---|-----------|------|
+        | 1 | Tasa de Ocupación | ≥ 65% |
+        | 2 | Tasa de No-Show | ≤ 10% |
+        | 3 | Tasa de Bloqueo | ≤ 10% |
+        | 4 | Efectividad de Cita | ≥ 88% |
+        | 5 | Rendimiento Promedio | Referencia |
+        | 6 | Cupos Sobrecupo | ≤ 5% |
+        | 7 | Cobertura Sectorial | ≥ 80% |
+        | 8 | Agendamiento Remoto | > 20% |
+        | 9 | Variación Mensual | ≤ 5pp |
+        | 10 | Ocupación Hora Extendida | ≥ 50% |
+
+        > **Privacidad**: los datos personales (RUT, nombre, teléfono) se eliminan
+        > automáticamente durante el procesamiento.
+        """)
+
+    with col_carga:
+        st.markdown("#### Cargar datos")
+
+        tab_upload, tab_demo = st.tabs(["📂 Subir archivo(s) IRIS", "🎲 Usar datos demo"])
+
+        with tab_upload:
+            st.markdown("Sube uno o más archivos `.xlsx` exportados desde IRIS:")
+            uploaded_files = st.file_uploader(
+                "Archivos IRIS (.xlsx)",
+                type=["xlsx"],
+                accept_multiple_files=True,
+                label_visibility="collapsed",
+                help="Formato: 'Cantidad de Cupos por Citas' generado por IRIS"
+            )
+
+            if uploaded_files:
+                if st.button("⚙️ Procesar archivos", type="primary", use_container_width=True):
+                    dfs = []
+                    meta_list = []
+                    errores_globales = []
+
+                    progress = st.progress(0, text="Procesando...")
+                    for i, uf in enumerate(uploaded_files):
+                        progress.progress((i + 1) / len(uploaded_files),
+                                          text=f"Procesando {uf.name}...")
+                        file_bytes = BytesIO(uf.read())
+
+                        # Validar
+                        file_bytes.seek(0)
+                        valido, msg_val, n = validate_structure(file_bytes)
+                        if not valido:
+                            errores_globales.append(f"⚠️ {uf.name}: {msg_val}")
+                            continue
+
+                        # Procesar
+                        file_bytes.seek(0)
+                        df_proc, meta, errs = process_iris_file(file_bytes, uf.name)
+                        if df_proc is not None:
+                            dfs.append(df_proc)
+                            meta_list.append(meta)
+                        if errs:
+                            errores_globales.extend([f"{uf.name}: {e}" for e in errs])
+
+                    progress.empty()
+
+                    if dfs:
+                        df_final = consolidate_files(dfs)
+                        st.session_state.df = df_final
+                        st.session_state.metadata_list = meta_list
+                        st.session_state.archivos_cargados = [f.name for f in uploaded_files]
+                        st.session_state.demo_loaded = False
+                        st.success(f"✅ {len(dfs)} archivo(s) procesados · **{len(df_final):,}** registros consolidados")
+
+                    for err in errores_globales:
+                        st.warning(err)
+
+        with tab_demo:
+            st.markdown("""
+            Carga datos **sintéticos** generados a partir de las distribuciones
+            reales del CESFAM N°5 (2025) para explorar todas las funcionalidades.
+            """)
+            n_demo = st.slider("Número de registros demo", 20_000, 150_000, 80_000, 10_000)
+            if st.button("🎲 Cargar datos demo", type="secondary", use_container_width=True):
+                with st.spinner("Generando datos demo..."):
+                    df_demo = generate_demo_data(n_records=n_demo)
+                    st.session_state.df = df_demo
+                    st.session_state.metadata_list = [get_demo_metadata()]
+                    st.session_state.demo_loaded = True
+                st.success(f"✅ Demo cargado · **{len(df_demo):,}** registros · 7 CESFAM · 12 meses")
+                st.info("Navega al **Dashboard KPIs** en el menú lateral para ver los resultados.")
+
+    # ── Resumen de datos cargados ──
+    if has_data():
+        st.divider()
+        df = st.session_state.df
+        st.markdown("#### Resumen de datos cargados")
+
+        cols = st.columns(5)
+        metrics = [
+            ("Total registros", f"{len(df):,}", "📋"),
+            ("CESFAM", f"{df['ESTABLECIMIENTO'].nunique()}", "🏥"),
+            ("Instrumentos", f"{df['INSTRUMENTO'].nunique()}", "👤"),
+            ("Meses", f"{df['MES_NUM'].nunique()}", "📅"),
+            ("Tipos atención", f"{df['TIPO ATENCION'].nunique()}", "📌"),
+        ]
+        for col, (label, val, icon) in zip(cols, metrics):
+            col.metric(f"{icon} {label}", val)
+
+        # Estado de cupos global
+        st.markdown("##### Composición de cupos")
+        col1, col2 = st.columns([2, 1])
+        with col1:
+            fig_est = chart_estado_cupos(df)
+            st.plotly_chart(fig_est, use_container_width=True)
+        with col2:
+            st.markdown("**Archivos procesados:**")
+            archivos = df["_archivo"].unique()
+            for a in archivos:
+                n = (df["_archivo"] == a).sum()
+                st.write(f"• {a[:40]} ({n:,} reg.)")
+
+
+# ─────────────────────────────────────────────────────────────
+# PÁGINA 2: DASHBOARD KPIs
+# ─────────────────────────────────────────────────────────────
+def page_dashboard(dff: pd.DataFrame):
+    st.markdown("""
+    <div class="main-header">
+        <h1>📊 Dashboard de KPIs</h1>
+        <p>10 indicadores clave de productividad · Semáforo de alertas</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if dff.empty:
+        st.warning("Sin datos con los filtros seleccionados.")
+        return
+
+    kpis = calculate_all_kpis(dff)
+
+    # ── Tarjetas KPI ──
+    st.markdown("#### Indicadores Clave")
+
+    kpi_order = [
+        ("ocupacion", "Tasa Ocupación"),
+        ("no_show", "No-Show"),
+        ("bloqueo", "Bloqueo"),
+        ("efectividad", "Efectividad Cita"),
+        ("rendimiento", "Rendimiento"),
+        ("sobrecupo", "Sobrecupo"),
+        ("cobertura_sectorial", "Cob. Sectorial"),
+        ("agendamiento_remoto", "Ag. Remoto"),
+        ("variacion_mensual", "Var. Mensual"),
+        ("ocupacion_extendida", "Ocup. Extendida"),
+    ]
+
+    cols = st.columns(5)
+    for i, (key, label) in enumerate(kpi_order):
+        k = kpis.get(key, {})
+        valor = k.get("valor", 0)
+        unidad = k.get("unidad", "%")
+        sem = k.get("semaforo", "gris")
+        icon = semaforo_icon(sem)
+        delta = None
+        if k.get("umbral_ok") and unidad == "%":
+            delta = kpi_delta(valor, k["umbral_ok"], k.get("direccion") == "mayor_es_mejor")
+
+        with cols[i % 5]:
+            st.metric(
+                label=f"{icon} {label}",
+                value=f"{valor:.1f} {unidad}",
+                delta=delta,
+                delta_color="normal" if k.get("direccion") == "mayor_es_mejor" else "inverse",
+            )
+
+    st.divider()
+
+    # ── Tabla semáforo ──
+    col_tabla, col_sector = st.columns([2, 1])
+    with col_tabla:
+        st.markdown("#### Semáforo de KPIs")
+        df_sem = build_semaforo_table(kpis)
+        # Estilo: resaltar filas rojas
+        def highlight_row(row):
+            if row.get("_semaforo") == "rojo":
+                return ["background-color: #FDEDEC"] * len(row)
+            elif row.get("_semaforo") == "amarillo":
+                return ["background-color: #FEF9E7"] * len(row)
+            return [""] * len(row)
+
+        display_cols = ["Estado", "Indicador", "Valor", "Meta", "Alerta si", "Descripción"]
+        styled = (df_sem[display_cols + ["_semaforo"]]
+                  .style
+                  .apply(highlight_row, axis=1)
+                  .hide(axis="index"))
+        st.dataframe(styled, use_container_width=True, hide_index=True,
+                     column_config={"_semaforo": None})
+
+    with col_sector:
+        st.markdown("#### Distribución Sectorial")
+        fig_sec = chart_sector(dff)
+        st.plotly_chart(fig_sec, use_container_width=True)
+
+    st.divider()
+
+    # ── Ranking centros + Multi-KPI ──
+    col1, col2 = st.columns(2)
+    with col1:
+        df_centros = kpis_por_centro(dff)
+        if not df_centros.empty:
+            fig_rank = chart_ranking_centros(df_centros)
+            st.plotly_chart(fig_rank, use_container_width=True)
+    with col2:
+        df_meses = kpis_por_mes(dff)
+        if not df_meses.empty:
+            fig_multi = chart_multi_kpi(df_meses)
+            st.plotly_chart(fig_multi, use_container_width=True)
+
+
+# ─────────────────────────────────────────────────────────────
+# PÁGINA 3: EVOLUCIÓN TEMPORAL
+# ─────────────────────────────────────────────────────────────
+def page_evolucion(dff: pd.DataFrame):
+    st.markdown("""
+    <div class="main-header">
+        <h1>📈 Evolución Temporal de KPIs</h1>
+        <p>Tendencias mes a mes · Comparativo vs umbrales</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if dff.empty:
+        st.warning("Sin datos con los filtros seleccionados.")
+        return
+
+    df_meses = kpis_por_mes(dff)
+    if df_meses.empty:
+        st.warning("No hay suficientes datos mensuales.")
+        return
+
+    # Fila 1
+    col1, col2 = st.columns(2)
+    with col1:
+        fig = chart_evolucion_mensual(df_meses, "ocupacion", "Tasa de Ocupación",
+                                      umbral_ok=65, umbral_alerta=50)
+        st.plotly_chart(fig, use_container_width=True)
+    with col2:
+        fig = chart_noshow_vs_umbral(df_meses)
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Fila 2
+    col3, col4 = st.columns(2)
+    with col3:
+        fig = chart_evolucion_mensual(df_meses, "bloqueo", "Tasa de Bloqueo",
+                                      umbral_ok=10, umbral_alerta=15)
+        st.plotly_chart(fig, use_container_width=True)
+    with col4:
+        fig = chart_evolucion_mensual(df_meses, "efectividad", "Efectividad de Cita",
+                                      umbral_ok=88, umbral_alerta=80)
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Fila 3
+    col5, col6 = st.columns(2)
+    with col5:
+        fig = chart_evolucion_mensual(df_meses, "agendamiento_remoto", "Agendamiento Remoto",
+                                      umbral_ok=20, umbral_alerta=5)
+        st.plotly_chart(fig, use_container_width=True)
+    with col6:
+        fig = chart_evolucion_mensual(df_meses, "cobertura_sectorial", "Cobertura Sectorial",
+                                      umbral_ok=80, umbral_alerta=60)
+        st.plotly_chart(fig, use_container_width=True)
+
+    # Fila 4: Volumen mensual
+    st.markdown("#### Volumen de Registros por Mes")
+    col7, col8 = st.columns(2)
+    with col7:
+        import plotly.graph_objects as go
+        fig_vol = go.Figure(go.Bar(
+            x=df_meses["mes_nombre"],
+            y=df_meses["total_registros"],
+            marker_color="#2E86C1",
+            text=[f"{v:,}" for v in df_meses["total_registros"]],
+            textposition="outside",
+            hovertemplate="<b>%{x}</b><br>Registros: %{y:,}<extra></extra>",
+        ))
+        fig_vol.update_layout(
+            title="Total Registros por Mes",
+            template="plotly_white",
+            height=380,
+            xaxis_title="Mes",
+            yaxis_title="Registros",
+            margin=dict(l=40, r=20, t=50, b=40),
+        )
+        st.plotly_chart(fig_vol, use_container_width=True)
+    with col8:
+        fig_rend = chart_evolucion_mensual(
+            df_meses, "rendimiento", "Rendimiento Promedio", unidad=" min"
+        )
+        st.plotly_chart(fig_rend, use_container_width=True)
+
+
+# ─────────────────────────────────────────────────────────────
+# PÁGINA 4: ANÁLISIS DETALLADO
+# ─────────────────────────────────────────────────────────────
+def page_analisis(dff: pd.DataFrame):
+    st.markdown("""
+    <div class="main-header">
+        <h1>🔍 Análisis Detallado</h1>
+        <p>Desagregación por instrumento · Tipo de atención · Sector · Grupo etario</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if dff.empty:
+        st.warning("Sin datos con los filtros seleccionados.")
+        return
+
+    sub_tab1, sub_tab2, sub_tab3, sub_tab4 = st.tabs([
+        "Por Instrumento", "Por Tipo Atención", "Mapa de Calor", "Grupo Etario"
+    ])
+
+    with sub_tab1:
+        col1, col2 = st.columns(2)
+        with col1:
+            fig_rend = chart_rendimiento_instrumento(dff)
+            st.plotly_chart(fig_rend, use_container_width=True)
+        with col2:
+            df_inst = kpis_por_instrumento(dff)
+            if not df_inst.empty:
+                import plotly.graph_objects as go
+                colors = [
+                    "#27AE60" if v >= 65 else "#F39C12" if v >= 50 else "#E74C3C"
+                    for v in df_inst["ocupacion"]
+                ]
+                fig_inst = go.Figure(go.Bar(
+                    x=df_inst["ocupacion"],
+                    y=df_inst["instrumento"].str[:28],
+                    orientation="h",
+                    marker_color=colors,
+                    text=[f"{v:.1f}%" for v in df_inst["ocupacion"]],
+                    textposition="outside",
+                    hovertemplate="<b>%{y}</b><br>Ocupación: %{x:.1f}%<extra></extra>",
+                ))
+                fig_inst.update_layout(
+                    title="Ocupación por Instrumento (%)",
+                    template="plotly_white",
+                    height=max(350, len(df_inst) * 32 + 80),
+                    margin=dict(l=40, r=20, t=50, b=40),
+                    xaxis=dict(range=[0, 105], title="Ocupación (%)"),
+                )
+                st.plotly_chart(fig_inst, use_container_width=True)
+
+        # Tabla resumen por instrumento
+        st.markdown("##### Tabla de KPIs por Instrumento")
+        df_inst2 = kpis_por_instrumento(dff)
+        if not df_inst2.empty:
+            df_inst2_disp = df_inst2.copy()
+            df_inst2_disp.columns = [
+                "Instrumento", "Ocupación %", "No-Show %",
+                "Efectividad %", "Rendimiento (min)", "Total Registros", "Citados"
+            ]
+            df_inst2_disp = df_inst2_disp.round(1)
+            st.dataframe(df_inst2_disp, use_container_width=True, hide_index=True)
+
+    with sub_tab2:
+        col1, col2 = st.columns(2)
+        with col1:
+            fig_ta = chart_tipo_atencion(dff, top_n=15)
+            st.plotly_chart(fig_ta, use_container_width=True)
+        with col2:
+            # No-show por tipo atención
+            if "TIPO ATENCION" in dff.columns:
+                from src.kpis import calc_no_show
+                ta_noshow = (
+                    dff.groupby("TIPO ATENCION")
+                    .apply(calc_no_show)
+                    .reset_index(name="no_show")
+                    .sort_values("no_show", ascending=False)
+                    .head(15)
+                )
+                import plotly.graph_objects as go
+                colors_ns = [
+                    "#E74C3C" if v > 15 else "#F39C12" if v > 10 else "#27AE60"
+                    for v in ta_noshow["no_show"]
+                ]
+                fig_ns = go.Figure(go.Bar(
+                    x=ta_noshow["no_show"],
+                    y=ta_noshow["TIPO ATENCION"].str[:30],
+                    orientation="h",
+                    marker_color=colors_ns,
+                    text=[f"{v:.1f}%" for v in ta_noshow["no_show"]],
+                    textposition="outside",
+                    hovertemplate="<b>%{y}</b><br>No-Show: %{x:.1f}%<extra></extra>",
+                ))
+                fig_ns.update_layout(
+                    title="No-Show por Tipo de Atención (Top 15)",
+                    template="plotly_white",
+                    height=420,
+                    margin=dict(l=40, r=20, t=50, b=40),
+                    xaxis_title="No-Show (%)",
+                )
+                st.plotly_chart(fig_ns, use_container_width=True)
+
+    with sub_tab3:
+        fig_heat = chart_heatmap_instrumento_mes(dff)
+        st.plotly_chart(fig_heat, use_container_width=True)
+
+    with sub_tab4:
+        if "GRUPO_ETARIO" in dff.columns:
+            col1, col2 = st.columns(2)
+            with col1:
+                ge_counts = dff["GRUPO_ETARIO"].value_counts().sort_index()
+                import plotly.graph_objects as go
+                fig_ge = go.Figure(go.Bar(
+                    x=ge_counts.index.astype(str),
+                    y=ge_counts.values,
+                    marker_color="#2E86C1",
+                    text=[f"{v:,}" for v in ge_counts.values],
+                    textposition="outside",
+                    hovertemplate="<b>%{x}</b><br>%{y:,} registros<extra></extra>",
+                ))
+                fig_ge.update_layout(
+                    title="Distribución por Grupo Etario",
+                    template="plotly_white",
+                    height=380,
+                    xaxis_title="Grupo Etario",
+                    yaxis_title="Registros",
+                    margin=dict(l=40, r=20, t=50, b=40),
+                )
+                st.plotly_chart(fig_ge, use_container_width=True)
+
+            with col2:
+                # Ocupación por grupo etario
+                from src.kpis import calc_ocupacion
+                ge_ocup = (
+                    dff.groupby("GRUPO_ETARIO", observed=True)
+                    .apply(calc_ocupacion)
+                    .reset_index(name="ocupacion")
+                )
+                colors_ge = [
+                    "#27AE60" if v >= 65 else "#F39C12" if v >= 50 else "#E74C3C"
+                    for v in ge_ocup["ocupacion"]
+                ]
+                fig_ge2 = go.Figure(go.Bar(
+                    x=ge_ocup["GRUPO_ETARIO"].astype(str),
+                    y=ge_ocup["ocupacion"],
+                    marker_color=colors_ge,
+                    text=[f"{v:.1f}%" for v in ge_ocup["ocupacion"]],
+                    textposition="outside",
+                ))
+                fig_ge2.add_hline(y=65, line_dash="dash", line_color="#27AE60",
+                                   annotation_text="Meta 65%")
+                fig_ge2.update_layout(
+                    title="Ocupación por Grupo Etario",
+                    template="plotly_white",
+                    height=380,
+                    xaxis_title="Grupo Etario",
+                    yaxis_title="Ocupación (%)",
+                    margin=dict(l=40, r=20, t=50, b=40),
+                )
+                st.plotly_chart(fig_ge2, use_container_width=True)
+        else:
+            st.info("Columna de grupo etario no disponible en los datos cargados.")
+
+
+# ─────────────────────────────────────────────────────────────
+# PÁGINA 5: ALERTAS Y BRECHAS
+# ─────────────────────────────────────────────────────────────
+def page_alertas(dff: pd.DataFrame):
+    st.markdown("""
+    <div class="main-header">
+        <h1>⚠️ Alertas y Brechas Críticas</h1>
+        <p>Detección automática de brechas según el modelo APS-SSMC</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if dff.empty:
+        st.warning("Sin datos con los filtros seleccionados.")
+        return
+
+    alertas = detectar_alertas(dff)
+
+    if not alertas:
+        st.success("✅ No se detectaron brechas críticas con los filtros actuales.", icon="✅")
+    else:
+        st.error(f"Se detectaron **{len(alertas)}** brecha(s) que requieren atención.", icon="⚠️")
+
+    col_alertas, col_resumen = st.columns([2, 1])
+
+    with col_alertas:
+        st.markdown("#### Detalle de Brechas")
+        for a in alertas:
+            sem = a.get("semaforo", "gris")
+            icon = "🔴" if sem == "rojo" else "🟡"
+            css_class = "alerta-rojo" if sem == "rojo" else "alerta-amarillo"
+            umbral = a.get("umbral_alerta", "")
+            st.markdown(f"""
+            <div class="{css_class}">
+                <strong>{icon} {a['tipo']}</strong><br>
+                Valor actual: <strong>{a['valor']:.1f} {a['unidad']}</strong>
+                {'· Umbral: ' + str(umbral) + a['unidad'] if umbral else ''}<br>
+                <small>{a['descripcion']}</small>
+            </div>
+            """, unsafe_allow_html=True)
+
+        if not alertas:
+            st.markdown("""
+            <div style="background:#D5F5E3; border-left:4px solid #27AE60;
+                        padding:1rem; border-radius:5px;">
+                <strong>🟢 Sin brechas detectadas</strong><br>
+                Todos los indicadores están dentro de los umbrales aceptables.
+            </div>
+            """, unsafe_allow_html=True)
+
+    with col_resumen:
+        st.markdown("#### Resumen de Brechas")
+        n_rojo = sum(1 for a in alertas if a.get("semaforo") == "rojo")
+        n_amarillo = sum(1 for a in alertas if a.get("semaforo") == "amarillo")
+        st.metric("🔴 Críticas", n_rojo)
+        st.metric("🟡 En observación", n_amarillo)
+        st.metric("🟢 OK", 10 - len(alertas))
+
+    st.divider()
+
+    # ── Detalle por mes y centro ──
+    st.markdown("#### Análisis por Centro y Mes")
+    df_centros = kpis_por_centro(dff)
+    if not df_centros.empty:
+        # Identificar centros bajo umbral
+        centros_criticos = df_centros[df_centros["ocupacion"] < 50]
+        if not centros_criticos.empty:
+            st.warning(f"**{len(centros_criticos)} centro(s)** con ocupación < 50%:")
+            for _, row in centros_criticos.iterrows():
+                st.write(f"• **{row['centro']}**: {row['ocupacion']:.1f}% ocupación")
+        else:
+            st.success("Todos los centros superan el umbral crítico de ocupación (50%).")
+
+        st.markdown("##### KPIs por Centro")
+        df_c_display = df_centros.copy()
+        df_c_display.columns = [
+            "Centro", "Ocupación %", "No-Show %", "Bloqueo %",
+            "Efectividad %", "Rendimiento (min)", "Total Registros"
+        ]
+        def color_ocupacion(val):
+            if isinstance(val, float):
+                if val >= 65:
+                    return "color: #27AE60; font-weight: bold"
+                elif val >= 50:
+                    return "color: #F39C12; font-weight: bold"
+                else:
+                    return "color: #E74C3C; font-weight: bold"
+            return ""
+
+        styled_c = df_c_display.style.applymap(color_ocupacion, subset=["Ocupación %"]).format({
+            "Ocupación %": "{:.1f}",
+            "No-Show %": "{:.1f}",
+            "Bloqueo %": "{:.1f}",
+            "Efectividad %": "{:.1f}",
+            "Rendimiento (min)": "{:.1f}",
+            "Total Registros": "{:,.0f}",
+        })
+        st.dataframe(styled_c, use_container_width=True, hide_index=True)
+
+
+# ─────────────────────────────────────────────────────────────
+# MAIN
+# ─────────────────────────────────────────────────────────────
+def main():
+    nav, filtros = render_sidebar()
+
+    if has_data():
+        dff = apply_filters(st.session_state.df, filtros)
+    else:
+        dff = pd.DataFrame()
+
+    if nav == "🏠 Inicio y Carga":
+        page_inicio()
+    elif nav == "📊 Dashboard KPIs":
+        if not has_data():
+            st.warning("Primero carga datos desde **Inicio y Carga**.")
+        else:
+            page_dashboard(dff)
+    elif nav == "📈 Evolución Temporal":
+        if not has_data():
+            st.warning("Primero carga datos desde **Inicio y Carga**.")
+        else:
+            page_evolucion(dff)
+    elif nav == "🔍 Análisis Detallado":
+        if not has_data():
+            st.warning("Primero carga datos desde **Inicio y Carga**.")
+        else:
+            page_analisis(dff)
+    elif nav == "⚠️ Alertas y Brechas":
+        if not has_data():
+            st.warning("Primero carga datos desde **Inicio y Carga**.")
+        else:
+            page_alertas(dff)
+
+    # Footer
+    st.sidebar.markdown("---")
+    st.sidebar.caption(
+        "Sistema de Análisis de Productividad APS · v1.0  \n"
+        "SSMC · Análisis de Datos con IA · 2025"
+    )
+
+
+if __name__ == "__main__":
+    main()

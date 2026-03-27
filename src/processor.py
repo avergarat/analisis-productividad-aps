@@ -117,9 +117,7 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
     # SECTOR: normalizar valores no estándar → NO INFORMADO
     if "SECTOR" in df.columns:
         df["SECTOR"] = df["SECTOR"].fillna("NO INFORMADO").str.strip().str.upper()
-        df["SECTOR"] = df["SECTOR"].apply(
-            lambda x: x if x in VALID_SECTORS else "NO INFORMADO"
-        )
+        df["SECTOR"] = df["SECTOR"].where(df["SECTOR"].isin(VALID_SECTORS), "NO INFORMADO")
 
     # Columnas numéricas
     for col in ["RENDIMIENTO", "CUPOS UTILIZADOS", "MES_NUM", "HORA_NUM", "EDAD_ANO"]:
@@ -132,9 +130,9 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
 
     # 8. Agregar columnas derivadas
     if "MES_NUM" in df.columns:
-        df["TRIMESTRE"] = df["MES_NUM"].apply(
-            lambda m: f"Q{int((m - 1) // 3) + 1}" if pd.notna(m) else "Sin dato"
-        )
+        _TRIM_MAP = {1:"Q1",2:"Q1",3:"Q1",4:"Q2",5:"Q2",6:"Q2",
+                     7:"Q3",8:"Q3",9:"Q3",10:"Q4",11:"Q4",12:"Q4"}
+        df["TRIMESTRE"] = df["MES_NUM"].map(_TRIM_MAP).fillna("Sin dato")
         MESES_ES = {
             1: "Enero", 2: "Febrero", 3: "Marzo", 4: "Abril",
             5: "Mayo", 6: "Junio", 7: "Julio", 8: "Agosto",
@@ -143,8 +141,8 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
         df["MES_NOMBRE"] = df["MES_NUM"].map(MESES_ES)
 
     if "HORA_NUM" in df.columns:
-        df["HORARIO_EXTENDIDO"] = df["HORA_NUM"].apply(
-            lambda h: "Extendido" if pd.notna(h) and h >= 18 else "Normal"
+        df["HORARIO_EXTENDIDO"] = np.where(
+            df["HORA_NUM"].notna() & (df["HORA_NUM"] >= 18), "Extendido", "Normal"
         )
 
     if "EDAD_ANO" in df.columns:
@@ -154,8 +152,9 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
 
     # 9. Tipo de agendamiento: marcar remoto
     if "TIPO DE AGENDAMIENTO" in df.columns:
-        df["AGENDAMIENTO_REMOTO"] = df["TIPO DE AGENDAMIENTO"].apply(
-            lambda x: "Remoto" if str(x) in {"Telefónicamente", "Telefonicamente", "Telesalud"} else "Presencial/Otro"
+        _REMOTE = {"Telefónicamente", "Telefonicamente", "Telesalud"}
+        df["AGENDAMIENTO_REMOTO"] = np.where(
+            df["TIPO DE AGENDAMIENTO"].isin(_REMOTE), "Remoto", "Presencial/Otro"
         )
 
     # 10. Tracking de archivo fuente

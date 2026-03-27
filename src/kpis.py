@@ -4,6 +4,7 @@ Basado en el modelo de análisis SSMC - Servicio de Salud Metropolitano Central.
 """
 import pandas as pd
 import numpy as np
+import streamlit as st
 
 # ──────────────────────────────────────────────
 # Definición de KPIs: umbrales y alertas
@@ -201,6 +202,7 @@ def calc_ocupacion_extendida(df: pd.DataFrame) -> float:
 # Función principal: calcular todos los KPIs
 # ──────────────────────────────────────────────
 
+@st.cache_data
 def calculate_all_kpis(df: pd.DataFrame) -> dict:
     """
     Calcula los 10 KPIs sobre el DataFrame filtrado.
@@ -266,6 +268,7 @@ def _calc_variacion_mensual(df: pd.DataFrame) -> dict:
 # KPIs agrupados (para gráficos de evolución)
 # ──────────────────────────────────────────────
 
+@st.cache_data
 def kpis_por_mes(df: pd.DataFrame) -> pd.DataFrame:
     """Retorna DataFrame con KPIs calculados por mes."""
     if "MES_NUM" not in df.columns or df.empty:
@@ -297,6 +300,7 @@ def kpis_por_mes(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("mes")
 
 
+@st.cache_data
 def kpis_por_instrumento(df: pd.DataFrame) -> pd.DataFrame:
     """KPIs agrupados por instrumento/profesional."""
     if "INSTRUMENTO" not in df.columns or df.empty:
@@ -316,6 +320,7 @@ def kpis_por_instrumento(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("ocupacion", ascending=False)
 
 
+@st.cache_data
 def kpis_por_centro(df: pd.DataFrame) -> pd.DataFrame:
     """KPIs agrupados por establecimiento."""
     if "ESTABLECIMIENTO" not in df.columns or df.empty:

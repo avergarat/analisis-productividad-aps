@@ -5,6 +5,8 @@ Servicio de Salud Metropolitano Central - Chile
 import streamlit as st
 import pandas as pd
 import numpy as np
+import os
+import pickle
 from io import BytesIO
 import warnings
 
@@ -34,13 +36,21 @@ def check_password():
             st.error("Contraseña incorrecta. Intenta nuevamente.")
         st.stop()
 
+# ── Configuración de página (debe ser el primer comando st) ──
+st.set_page_config(
+    page_title="Productividad APS | SSMC",
+    page_icon="🏥",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
 check_password()
 
 warnings.filterwarnings("ignore")
 
 
 
-from src.processor import process_iris_file, consolidate_files, validate_structure
+from src.processor import process_iris_file, consolidate_files
 from src.kpis import (
     calculate_all_kpis, kpis_por_mes, kpis_por_instrumento,
     kpis_por_centro, detectar_alertas, KPI_DEFINITIONS
@@ -52,16 +62,6 @@ from src.charts import (
     build_semaforo_table
 )
 from src.demo_data import generate_demo_data, get_demo_metadata
-
-# ─────────────────────────────────────────────────────────────
-# CONFIGURACIÓN DE PÁGINA
-# ─────────────────────────────────────────────────────────────
-st.set_page_config(
-    page_title="Productividad APS | SSMC",
-    page_icon="🏥",
-    layout="wide",
-    initial_sidebar_state="expanded",
-)
 
 # CSS personalizado
 st.markdown("""
@@ -109,6 +109,47 @@ st.markdown("""
 
 
 # ─────────────────────────────────────────────────────────────
+# PERSISTENCIA LOCAL (/tmp)  ── los datos sobreviven recargas
+# ─────────────────────────────────────────────────────────────
+_DATA_PARQUET = "/tmp/ssmc_aps_df.parquet"
+_DATA_PKL     = "/tmp/ssmc_aps_meta.pkl"
+
+
+def _save_session():
+    """Guarda df y metadata en /tmp para persistir entre recargas."""
+    try:
+        if st.session_state.get("df") is not None and not st.session_state.get("demo_loaded", False):
+            st.session_state.df.to_parquet(_DATA_PARQUET, index=False)
+            with open(_DATA_PKL, "wb") as _f:
+                pickle.dump({
+                    "metadata_list":    st.session_state.metadata_list,
+                    "archivos_cargados": st.session_state.archivos_cargados,
+                    "registro_cargas":  st.session_state.registro_cargas,
+                }, _f)
+    except Exception:
+        pass
+
+
+def _load_session() -> bool:
+    """Carga datos guardados desde /tmp. Retorna True si se encontraron datos."""
+    try:
+        if os.path.exists(_DATA_PARQUET):
+            df = pd.read_parquet(_DATA_PARQUET)
+            if not df.empty:
+                st.session_state.df = df
+                if os.path.exists(_DATA_PKL):
+                    with open(_DATA_PKL, "rb") as _f:
+                        meta = pickle.load(_f)
+                    st.session_state.metadata_list   = meta.get("metadata_list", [])
+                    st.session_state.archivos_cargados = meta.get("archivos_cargados", [])
+                    st.session_state.registro_cargas = meta.get("registro_cargas", [])
+                return True
+    except Exception:
+        pass
+    return False
+
+
+# ─────────────────────────────────────────────────────────────
 # SESSION STATE
 # ─────────────────────────────────────────────────────────────
 def init_session():
@@ -125,6 +166,11 @@ def init_session():
 
 
 init_session()
+
+# Auto-cargar datos guardados si la sesión está vacía
+if st.session_state.df is None and not st.session_state.demo_loaded:
+    if _load_session():
+        st.toast(f"💾 Datos recuperados automáticamente · {len(st.session_state.df):,} registros", icon="✅")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -294,15 +340,7 @@ def page_inicio():
                                           text=f"Procesando {uf.name}...")
                         file_bytes = BytesIO(uf.read())
 
-                        # Validar
-                        file_bytes.seek(0)
-                        valido, msg_val, n = validate_structure(file_bytes)
-                        if not valido:
-                            errores_globales.append(f"⚠️ {uf.name}: {msg_val}")
-                            continue
-
-                        # Procesar
-                        file_bytes.seek(0)
+                        # Procesar directamente (sin pre-validación que duplica la lectura)
                         df_proc, meta, errs = process_iris_file(file_bytes, uf.name)
                         if df_proc is not None:
                             dfs.append(df_proc)
@@ -333,7 +371,9 @@ def page_inicio():
                                 "Registros nuevos": len(df_nuevos),
                                 "Cargado el": _dt.now().strftime("%d/%m/%Y %H:%M"),
                             })
+                        _save_session()
                         st.success(f"✅ {len(dfs)} archivo(s) procesados · **{len(df_nuevos):,}** nuevos registros · **{len(df_final):,}** registros acumulados en total")
+                        st.info("💾 Datos guardados automáticamente. Se recuperarán solos la próxima vez que abras la app.", icon="ℹ️")
 
                     for err in errores_globales:
                         st.warning(err)
@@ -350,6 +390,12 @@ def page_inicio():
                 if st.button("📥 Restaurar datos guardados", type="primary", use_container_width=True):
                     with st.spinner("Restaurando datos..."):
                         df_rest = pd.read_csv(uploaded_csv)
+                        # Restaurar tipos de columnas
+                        if "FECHA" in df_rest.columns:
+                            df_rest["FECHA"] = pd.to_datetime(df_rest["FECHA"], errors="coerce")
+                        for _col in ["MES_NUM", "HORA_NUM", "RENDIMIENTO", "CUPOS UTILIZADOS", "EDAD_ANO"]:
+                            if _col in df_rest.columns:
+                                df_rest[_col] = pd.to_numeric(df_rest[_col], errors="coerce")
                         if st.session_state.df is not None and not st.session_state.df.empty and not st.session_state.demo_loaded:
                             df_rest = consolidate_files([st.session_state.df, df_rest])
                         st.session_state.df = df_rest
@@ -363,6 +409,7 @@ def page_inicio():
                             "Registros nuevos": len(df_rest),
                             "Cargado el": _dt.now().strftime("%d/%m/%Y %H:%M"),
                         })
+                    _save_session()
                     st.success(f"✅ Datos restaurados · **{len(df_rest):,}** registros cargados")
                     st.info("Navega al **Dashboard KPIs** en el menú lateral para ver los resultados.")
 
@@ -449,6 +496,11 @@ def page_inicio():
                 st.session_state.archivos_cargados = []
                 st.session_state.demo_loaded = False
                 st.session_state.registro_cargas = []
+                for _p in [_DATA_PARQUET, _DATA_PKL]:
+                    try:
+                        os.remove(_p)
+                    except Exception:
+                        pass
                 st.rerun()
 
         if st.session_state.registro_cargas:

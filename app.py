@@ -5,19 +5,21 @@ Servicio de Salud Metropolitano Central - Chile
 import streamlit as st
 import pandas as pd
 import numpy as np
-import os
-import pickle
 from io import BytesIO
 import warnings
 
 # ─────────────────────────────────────────────────────────────
 # AUTENTICACIÓN SIMPLE POR CONTRASEÑA
+# La contraseña vive en Streamlit Secrets → Settings → Secrets:
+#   [auth]
+#   password = "tu_clave_segura"
 # ─────────────────────────────────────────────────────────────
 def check_password():
     def password_entered():
-        if st.session_state["password"] == "salud2026":
+        expected = st.secrets.get("auth", {}).get("password", "salud2026")
+        if st.session_state["password"] == expected:
             st.session_state["password_correct"] = True
-            del st.session_state["password"]  # Borra la contraseña de la sesión
+            del st.session_state["password"]
         else:
             st.session_state["password_correct"] = False
 
@@ -62,6 +64,7 @@ from src.charts import (
     build_semaforo_table
 )
 from src.demo_data import generate_demo_data, get_demo_metadata
+from src.storage import save_data, load_data, delete_data, github_configured, storage_status
 
 # CSS personalizado
 st.markdown("""
@@ -109,43 +112,30 @@ st.markdown("""
 
 
 # ─────────────────────────────────────────────────────────────
-# PERSISTENCIA LOCAL (/tmp)  ── los datos sobreviven recargas
+# PERSISTENCIA — /tmp (caché rápido) + GitHub (durable, multi-usuario)
+# Gestión delegada a src/storage.py
 # ─────────────────────────────────────────────────────────────
-_DATA_PARQUET = "/tmp/ssmc_aps_df.parquet"
-_DATA_PKL     = "/tmp/ssmc_aps_meta.pkl"
-
-
 def _save_session():
-    """Guarda df y metadata en /tmp para persistir entre recargas."""
-    try:
-        if st.session_state.get("df") is not None and not st.session_state.get("demo_loaded", False):
-            st.session_state.df.to_parquet(_DATA_PARQUET, index=False)
-            with open(_DATA_PKL, "wb") as _f:
-                pickle.dump({
-                    "metadata_list":    st.session_state.metadata_list,
-                    "archivos_cargados": st.session_state.archivos_cargados,
-                    "registro_cargas":  st.session_state.registro_cargas,
-                }, _f)
-    except Exception:
-        pass
+    """Guarda df en GitHub + /tmp. Solo para datos reales (no demo)."""
+    if st.session_state.get("df") is None or st.session_state.get("demo_loaded", False):
+        return
+    ok, msg = save_data(
+        st.session_state.df,
+        registro_cargas=st.session_state.get("registro_cargas", [])
+    )
+    if not ok and "GitHub no configurado" not in msg:
+        st.toast(msg, icon="⚠️")
 
 
 def _load_session() -> bool:
-    """Carga datos guardados desde /tmp. Retorna True si se encontraron datos."""
-    try:
-        if os.path.exists(_DATA_PARQUET):
-            df = pd.read_parquet(_DATA_PARQUET)
-            if not df.empty:
-                st.session_state.df = df
-                if os.path.exists(_DATA_PKL):
-                    with open(_DATA_PKL, "rb") as _f:
-                        meta = pickle.load(_f)
-                    st.session_state.metadata_list   = meta.get("metadata_list", [])
-                    st.session_state.archivos_cargados = meta.get("archivos_cargados", [])
-                    st.session_state.registro_cargas = meta.get("registro_cargas", [])
-                return True
-    except Exception:
-        pass
+    """Carga datos desde /tmp o GitHub. Retorna True si se encontraron datos."""
+    df, meta, origen = load_data()
+    if df is not None and not df.empty:
+        st.session_state.df = df
+        reg = meta.get("registro_cargas", [])
+        if reg:
+            st.session_state.registro_cargas = reg
+        return True
     return False
 
 
@@ -167,10 +157,13 @@ def init_session():
 
 init_session()
 
-# Auto-cargar datos guardados si la sesión está vacía
+# Auto-cargar datos desde /tmp o GitHub si la sesión está vacía
 if st.session_state.df is None and not st.session_state.demo_loaded:
     if _load_session():
-        st.toast(f"💾 Datos recuperados automáticamente · {len(st.session_state.df):,} registros", icon="✅")
+        st.toast(
+            f"💾 Datos recuperados · {len(st.session_state.df):,} registros",
+            icon="✅"
+        )
 
 
 # ─────────────────────────────────────────────────────────────
@@ -373,7 +366,10 @@ def page_inicio():
                             })
                         _save_session()
                         st.success(f"✅ {len(dfs)} archivo(s) procesados · **{len(df_nuevos):,}** nuevos registros · **{len(df_final):,}** registros acumulados en total")
-                        st.info("💾 Datos guardados automáticamente. Se recuperarán solos la próxima vez que abras la app.", icon="ℹ️")
+                        if github_configured():
+                            st.info("💾 Datos guardados en GitHub — cualquier usuario verá estos datos al abrir la app.", icon="✅")
+                        else:
+                            st.warning("⚠️ GitHub no configurado: datos solo en caché local (se pierden al reiniciar el servidor). Configura `[github_storage]` en Secrets para persistencia real.", icon="⚠️")
 
                     for err in errores_globales:
                         st.warning(err)
@@ -496,11 +492,10 @@ def page_inicio():
                 st.session_state.archivos_cargados = []
                 st.session_state.demo_loaded = False
                 st.session_state.registro_cargas = []
-                for _p in [_DATA_PARQUET, _DATA_PKL]:
-                    try:
-                        os.remove(_p)
-                    except Exception:
-                        pass
+                # Borrar de /tmp y GitHub
+                delete_data()
+                # Limpiar caché de KPIs
+                st.cache_data.clear()
                 st.rerun()
 
         if st.session_state.registro_cargas:
@@ -983,10 +978,15 @@ def main():
         else:
             page_alertas(dff)
 
-    # Footer
+    # Footer + estado almacenamiento
     st.sidebar.markdown("---")
+    status = storage_status()
+    if status["github_configurado"]:
+        st.sidebar.caption(f"💾 GitHub: `{status['repo']}`")
+    else:
+        st.sidebar.caption("⚠️ GitHub no configurado — persistencia solo en sesión activa")
     st.sidebar.caption(
-        "Sistema de Análisis de Productividad APS · v1.0  \n"
+        "Sistema de Análisis de Productividad APS · v1.1  \n"
         "SSMC · Modelo de Análisis de Productividad · 2026"
     )
 

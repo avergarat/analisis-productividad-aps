@@ -1,4 +1,4 @@
-"""
+n"""
 Generador de datos sintéticos para demo pública.
 Basado en estadísticas reales del CESFAM N°5 - SSMC 2025.
 """

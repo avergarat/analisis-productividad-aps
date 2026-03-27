@@ -19,7 +19,7 @@ VALID_SECTORS = {"VERDE", "LILA", "ROJO", "NO INFORMADO"}
 REQUIRED_COLUMNS = {
     "SS", "ESTABLECIMIENTO", "FECHA", "TIPO ATENCION", "INSTRUMENTO",
     "TIPO CUPO", "ESTADO CUPO", "ESTADO CITA", "SECTOR",
-    "TIPO DE AGENDAMIENTO", "MES_NUM"
+    "TIPO DE AGENDAMIENTO"
 }
 
 
@@ -113,6 +113,9 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
     # FECHA
     if "FECHA" in df.columns:
         df["FECHA"] = pd.to_datetime(df["FECHA"], format="%d-%m-%Y", errors="coerce")
+        # Derivar MES_NUM desde FECHA si no existe como columna propia
+        if "MES_NUM" not in df.columns:
+            df["MES_NUM"] = df["FECHA"].dt.month
 
     # SECTOR: normalizar valores no estándar → NO INFORMADO
     if "SECTOR" in df.columns:

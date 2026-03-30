@@ -2435,10 +2435,8 @@ def _generar_html_informe(
     kpis, df_centro, df_inst_c, df_kpis_ta,
     alertas_centro, n_verde, n_amarillo, n_rojo,
 ) -> str:
-    """Genera informe HTML autocontenido con gráficos embebidos como imágenes base64."""
+    """Genera informe HTML autocontenido con gráficos Plotly embebidos."""
     import plotly.graph_objects as go
-    import plotly.io as pio
-    import base64
     from src.kpis import semaforo, KPI_DEFINITIONS
     from src.charts import (
         chart_estado_cupos, chart_evolucion_mensual, chart_noshow_vs_umbral,
@@ -2447,15 +2445,10 @@ def _generar_html_informe(
     )
 
     def _fig_to_img(fig, width=900, height=450):
-        """Convierte fig Plotly a tag <img> base64 PNG."""
-        try:
-            img_bytes = pio.to_image(fig, format="png", width=width, height=height, scale=2)
-            b64 = base64.b64encode(img_bytes).decode()
-            return f'<img src="data:image/png;base64,{b64}" style="width:100%;max-width:{width}px;">'
-        except Exception:
-            # Si kaleido no está, usar plotly HTML interactivo embebido
-            return fig.to_html(include_plotlyjs="cdn", full_html=False,
-                               config={"staticPlot": True})
+        """Convierte fig Plotly a div HTML embebido (Plotly JS se carga una vez en <head>)."""
+        fig.update_layout(width=width, height=height)
+        return fig.to_html(include_plotlyjs=False, full_html=False,
+                           config={"staticPlot": True, "displayModeBar": False})
 
     def _sem_icon(val, kpi):
         s = semaforo(val, kpi)
@@ -2644,6 +2637,7 @@ def _generar_html_informe(
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Informe Productividad — {centro_sel}</title>
+<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
 <style>
   @media print {{ body {{ margin: 0.5cm; }} .no-print {{ display: none; }} .page-break {{ page-break-before: always; }} }}
   body {{ font-family: 'Segoe UI', Arial, sans-serif; color: #2C3E50; max-width: 1100px; margin: 0 auto; padding: 20px; line-height: 1.6; }}

@@ -347,6 +347,69 @@ def kpis_por_centro(df: pd.DataFrame) -> pd.DataFrame:
     return pd.DataFrame(rows).sort_values("ocupacion", ascending=False)
 
 
+@_cache
+def kpis_por_tipo_atencion(df: pd.DataFrame) -> pd.DataFrame:
+    """KPIs agrupados por TIPO ATENCION."""
+    if "TIPO ATENCION" not in df.columns or df.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for tipo, grp in df.groupby("TIPO ATENCION"):
+        row = {"tipo_atencion": tipo}
+        row["ocupacion"] = calc_ocupacion(grp)
+        row["no_show"] = calc_no_show(grp)
+        row["bloqueo"] = calc_bloqueo(grp)
+        row["efectividad"] = calc_efectividad(grp)
+        row["rendimiento"] = calc_rendimiento(grp)
+        row["sobrecupo"] = calc_sobrecupo(grp)
+        row["agendamiento_remoto"] = calc_agendamiento_remoto(grp)
+        row["total"] = len(grp)
+        row["citados"] = int((grp["ESTADO CUPO"] == "CITADO").sum())
+        row["disponibles"] = int((grp["ESTADO CUPO"] == "DISPONIBLE").sum())
+        row["bloqueados"] = int((grp["ESTADO CUPO"] == "BLOQUEADO").sum())
+        rows.append(row)
+
+    return pd.DataFrame(rows).sort_values("total", ascending=False)
+
+
+@_cache
+def kpis_tipo_atencion_mes(df: pd.DataFrame, tipos: tuple) -> pd.DataFrame:
+    """
+    KPIs por mes para los tipos de atención seleccionados.
+    Útil para series temporales comparativas.
+    tipos: tuple de strings (hashable para cache).
+    """
+    MESES_ES = {
+        1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr",
+        5: "May", 6: "Jun", 7: "Jul", 8: "Ago",
+        9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic"
+    }
+    if "TIPO ATENCION" not in df.columns or "MES_NUM" not in df.columns or df.empty:
+        return pd.DataFrame()
+
+    dff = df[df["TIPO ATENCION"].isin(tipos)] if tipos else df
+    if dff.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for (tipo, mes), grp in dff.groupby(["TIPO ATENCION", "MES_NUM"]):
+        row = {
+            "tipo_atencion": tipo,
+            "mes": int(mes),
+            "mes_nombre": MESES_ES.get(int(mes), str(mes)),
+            "ocupacion": calc_ocupacion(grp),
+            "no_show": calc_no_show(grp),
+            "efectividad": calc_efectividad(grp),
+            "bloqueo": calc_bloqueo(grp),
+            "rendimiento": calc_rendimiento(grp),
+            "total": len(grp),
+            "citados": int((grp["ESTADO CUPO"] == "CITADO").sum()),
+        }
+        rows.append(row)
+
+    return pd.DataFrame(rows).sort_values(["tipo_atencion", "mes"])
+
+
 def detectar_alertas(df: pd.DataFrame) -> list:
     """
     Detecta brechas críticas según el modelo APS.

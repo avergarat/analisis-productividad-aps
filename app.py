@@ -55,7 +55,8 @@ warnings.filterwarnings("ignore")
 from src.processor import process_iris_file, consolidate_files
 from src.kpis import (
     calculate_all_kpis, kpis_por_mes, kpis_por_instrumento,
-    kpis_por_centro, detectar_alertas, KPI_DEFINITIONS
+    kpis_por_centro, detectar_alertas, KPI_DEFINITIONS,
+    kpis_por_tipo_atencion, kpis_tipo_atencion_mes
 )
 from src.charts import (
     chart_ranking_centros, chart_evolucion_mensual, chart_heatmap_instrumento_mes,
@@ -753,29 +754,49 @@ def page_analisis(dff: pd.DataFrame):
             st.dataframe(df_inst2_disp, use_container_width=True, hide_index=True)
 
     with sub_tab2:
-        col1, col2 = st.columns(2)
-        with col1:
-            fig_ta = chart_tipo_atencion(dff, top_n=15)
-            st.plotly_chart(fig_ta)
-        with col2:
-            # No-show por tipo atención
-            if "TIPO ATENCION" in dff.columns:
+        import plotly.graph_objects as go
+        import plotly.express as px
+
+        if "TIPO ATENCION" not in dff.columns or dff.empty:
+            st.warning("No hay datos de Tipo de Atención con los filtros seleccionados.")
+        else:
+            # ── Filtro propio del tab ──────────────────────────────────
+            todos_tipos = sorted(dff["TIPO ATENCION"].dropna().unique().tolist())
+            top_default = (
+                dff["TIPO ATENCION"].value_counts().head(10).index.tolist()
+            )
+            tipos_sel = st.multiselect(
+                "Filtrar Tipos de Atención",
+                options=todos_tipos,
+                default=top_default,
+                key="filt_ta_det",
+                help="Selecciona los tipos de atención a analizar. Por defecto se muestran los 10 con más registros.",
+            )
+            if not tipos_sel:
+                tipos_sel = todos_tipos
+            dff_ta = dff[dff["TIPO ATENCION"].isin(tipos_sel)]
+
+            # ── Sección 1: Volumen y No-Show ───────────────────────────
+            st.markdown("##### Volumen y No-Show por Tipo de Atención")
+            col1, col2 = st.columns(2)
+            with col1:
+                fig_ta = chart_tipo_atencion(dff_ta, top_n=len(tipos_sel))
+                st.plotly_chart(fig_ta, use_container_width=True)
+            with col2:
                 from src.kpis import calc_no_show
                 ta_noshow = (
-                    dff.groupby("TIPO ATENCION")
+                    dff_ta.groupby("TIPO ATENCION")
                     .apply(calc_no_show)
                     .reset_index(name="no_show")
                     .sort_values("no_show", ascending=False)
-                    .head(15)
                 )
-                import plotly.graph_objects as go
                 colors_ns = [
                     "#E74C3C" if v > 15 else "#F39C12" if v > 10 else "#27AE60"
                     for v in ta_noshow["no_show"]
                 ]
                 fig_ns = go.Figure(go.Bar(
                     x=ta_noshow["no_show"],
-                    y=ta_noshow["TIPO ATENCION"].str[:30],
+                    y=ta_noshow["TIPO ATENCION"].str[:35],
                     orientation="h",
                     marker_color=colors_ns,
                     text=[f"{v:.1f}%" for v in ta_noshow["no_show"]],
@@ -783,13 +804,142 @@ def page_analisis(dff: pd.DataFrame):
                     hovertemplate="<b>%{y}</b><br>No-Show: %{x:.1f}%<extra></extra>",
                 ))
                 fig_ns.update_layout(
-                    title="No-Show por Tipo de Atención (Top 15)",
+                    title="No-Show por Tipo de Atención",
                     template="plotly_white",
-                    height=420,
-                    margin=dict(l=40, r=20, t=50, b=40),
-                    xaxis_title="No-Show (%)",
+                    height=max(380, len(ta_noshow) * 28 + 80),
+                    margin=dict(l=10, r=60, t=50, b=40),
+                    xaxis=dict(range=[0, max(ta_noshow["no_show"].max() * 1.2, 20)], title="No-Show (%)"),
                 )
-                st.plotly_chart(fig_ns)
+                st.plotly_chart(fig_ns, use_container_width=True)
+
+            # ── Sección 2: KPIs completos por tipo ────────────────────
+            st.markdown("##### KPIs por Tipo de Atención")
+            df_kpis_ta = kpis_por_tipo_atencion(dff_ta)
+            if not df_kpis_ta.empty:
+                # Semáforos visuales en la tabla
+                def _sem_icon(val, kpi):
+                    from src.kpis import semaforo
+                    s = semaforo(val, kpi)
+                    return {"verde": "🟢", "amarillo": "🟡", "rojo": "🔴"}.get(s, "⚪")
+
+                df_kpis_disp = df_kpis_ta.copy()
+                df_kpis_disp["Ocupación"] = df_kpis_disp.apply(
+                    lambda r: f"{_sem_icon(r['ocupacion'], 'ocupacion')} {r['ocupacion']:.1f}%", axis=1)
+                df_kpis_disp["No-Show"] = df_kpis_disp.apply(
+                    lambda r: f"{_sem_icon(r['no_show'], 'no_show')} {r['no_show']:.1f}%", axis=1)
+                df_kpis_disp["Bloqueo"] = df_kpis_disp.apply(
+                    lambda r: f"{_sem_icon(r['bloqueo'], 'bloqueo')} {r['bloqueo']:.1f}%", axis=1)
+                df_kpis_disp["Efectividad"] = df_kpis_disp.apply(
+                    lambda r: f"{_sem_icon(r['efectividad'], 'efectividad')} {r['efectividad']:.1f}%", axis=1)
+                df_kpis_disp["Sobrecupo"] = df_kpis_disp.apply(
+                    lambda r: f"{_sem_icon(r['sobrecupo'], 'sobrecupo')} {r['sobrecupo']:.1f}%", axis=1)
+                df_kpis_disp["Ag. Remoto"] = df_kpis_disp.apply(
+                    lambda r: f"{_sem_icon(r['agendamiento_remoto'], 'agendamiento_remoto')} {r['agendamiento_remoto']:.1f}%", axis=1)
+                df_kpis_disp["Rendim. (min)"] = df_kpis_disp["rendimiento"].round(1)
+                df_kpis_disp["Total"] = df_kpis_disp["total"].apply(lambda v: f"{v:,}")
+                df_kpis_disp["Citados"] = df_kpis_disp["citados"].apply(lambda v: f"{v:,}")
+                df_kpis_disp["Disponibles"] = df_kpis_disp["disponibles"].apply(lambda v: f"{v:,}")
+                df_kpis_disp["Bloqueados"] = df_kpis_disp["bloqueados"].apply(lambda v: f"{v:,}")
+
+                cols_show = [
+                    "tipo_atencion", "Total", "Citados", "Disponibles", "Bloqueados",
+                    "Ocupación", "No-Show", "Efectividad", "Bloqueo",
+                    "Sobrecupo", "Ag. Remoto", "Rendim. (min)"
+                ]
+                df_kpis_disp = df_kpis_disp[cols_show].rename(columns={"tipo_atencion": "Tipo de Atención"})
+                st.dataframe(df_kpis_disp, use_container_width=True, hide_index=True)
+
+            # ── Sección 3: Series temporales ──────────────────────────
+            st.markdown("##### Evolución Temporal por Tipo de Atención")
+            if "MES_NUM" not in dff_ta.columns or dff_ta["MES_NUM"].nunique() < 2:
+                st.info("Se necesitan al menos 2 meses de datos para mostrar series temporales.")
+            else:
+                # Limitar a máximo 8 tipos para legibilidad del gráfico
+                top8 = (
+                    dff_ta["TIPO ATENCION"].value_counts().head(8).index.tolist()
+                )
+                tipos_serie = [t for t in tipos_sel if t in top8][:8] or tipos_sel[:8]
+                df_serie = kpis_tipo_atencion_mes(dff_ta, tuple(tipos_serie))
+
+                if not df_serie.empty:
+                    MESES_ES = {1:"Ene",2:"Feb",3:"Mar",4:"Abr",5:"May",6:"Jun",
+                                7:"Jul",8:"Ago",9:"Sep",10:"Oct",11:"Nov",12:"Dic"}
+                    df_serie["mes_label"] = df_serie["mes"].map(
+                        lambda m: MESES_ES.get(int(m), str(m))
+                    )
+
+                    met_col1, met_col2 = st.columns(2)
+
+                    with met_col1:
+                        fig_ocu_ts = px.line(
+                            df_serie,
+                            x="mes_label", y="ocupacion",
+                            color="tipo_atencion",
+                            markers=True,
+                            labels={"mes_label": "Mes", "ocupacion": "Ocupación (%)", "tipo_atencion": "Tipo"},
+                            title="Tasa de Ocupación por Mes",
+                            template="plotly_white",
+                            height=380,
+                        )
+                        fig_ocu_ts.add_hline(y=65, line_dash="dash", line_color="#27AE60",
+                                             annotation_text="Meta 65%", annotation_position="bottom right")
+                        fig_ocu_ts.update_layout(margin=dict(l=20, r=20, t=50, b=40),
+                                                  legend=dict(font_size=10))
+                        st.plotly_chart(fig_ocu_ts, use_container_width=True)
+
+                    with met_col2:
+                        fig_ns_ts = px.line(
+                            df_serie,
+                            x="mes_label", y="no_show",
+                            color="tipo_atencion",
+                            markers=True,
+                            labels={"mes_label": "Mes", "no_show": "No-Show (%)", "tipo_atencion": "Tipo"},
+                            title="Tasa de No-Show por Mes",
+                            template="plotly_white",
+                            height=380,
+                        )
+                        fig_ns_ts.add_hline(y=10, line_dash="dash", line_color="#E74C3C",
+                                            annotation_text="Umbral 10%", annotation_position="top right")
+                        fig_ns_ts.update_layout(margin=dict(l=20, r=20, t=50, b=40),
+                                                 legend=dict(font_size=10))
+                        st.plotly_chart(fig_ns_ts, use_container_width=True)
+
+                    met_col3, met_col4 = st.columns(2)
+
+                    with met_col3:
+                        fig_ef_ts = px.line(
+                            df_serie,
+                            x="mes_label", y="efectividad",
+                            color="tipo_atencion",
+                            markers=True,
+                            labels={"mes_label": "Mes", "efectividad": "Efectividad (%)", "tipo_atencion": "Tipo"},
+                            title="Efectividad de Cita por Mes",
+                            template="plotly_white",
+                            height=380,
+                        )
+                        fig_ef_ts.add_hline(y=88, line_dash="dash", line_color="#27AE60",
+                                            annotation_text="Meta 88%", annotation_position="bottom right")
+                        fig_ef_ts.update_layout(margin=dict(l=20, r=20, t=50, b=40),
+                                                 legend=dict(font_size=10))
+                        st.plotly_chart(fig_ef_ts, use_container_width=True)
+
+                    with met_col4:
+                        fig_vol_ts = px.bar(
+                            df_serie,
+                            x="mes_label", y="citados",
+                            color="tipo_atencion",
+                            barmode="group",
+                            labels={"mes_label": "Mes", "citados": "Citados", "tipo_atencion": "Tipo"},
+                            title="Citados por Mes",
+                            template="plotly_white",
+                            height=380,
+                        )
+                        fig_vol_ts.update_layout(margin=dict(l=20, r=20, t=50, b=40),
+                                                  legend=dict(font_size=10))
+                        st.plotly_chart(fig_vol_ts, use_container_width=True)
+
+                    if len(tipos_sel) > 8:
+                        st.caption(f"ℹ️ Series temporales muestran los 8 tipos con mayor volumen. La tabla de KPIs incluye todos los {len(tipos_sel)} tipos seleccionados.")
 
     with sub_tab3:
         fig_heat = chart_heatmap_instrumento_mes(dff)

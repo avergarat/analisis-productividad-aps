@@ -162,11 +162,27 @@ init_session()
 
 # Auto-cargar datos desde /tmp o GitHub si la sesión está vacía
 if st.session_state.df is None and not st.session_state.demo_loaded:
-    if _load_session():
-        st.toast(
-            f"💾 Datos recuperados · {len(st.session_state.df):,} registros",
-            icon="✅"
-        )
+    try:
+        if _load_session():
+            n_rec = len(st.session_state.df)
+            if n_rec > 800_000:
+                # Dataset demasiado grande — no cargar automáticamente para evitar OOM
+                st.session_state.df = None
+                st.toast(
+                    "⚠️ Datos guardados muy grandes para cargar automáticamente. "
+                    "Sube los archivos manualmente.",
+                    icon="⚠️"
+                )
+            else:
+                st.toast(
+                    f"💾 Datos recuperados · {n_rec:,} registros",
+                    icon="✅"
+                )
+    except MemoryError:
+        st.session_state.df = None
+        st.toast("⚠️ Memoria insuficiente para recuperar datos guardados. Sube los archivos manualmente.", icon="⚠️")
+    except Exception:
+        st.session_state.df = None
 
 
 # ─────────────────────────────────────────────────────────────

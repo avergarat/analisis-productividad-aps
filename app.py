@@ -347,9 +347,11 @@ def page_inicio():
                     progress.empty()
 
                     if dfs:
+                        n_archivos = len(dfs)
                         df_nuevos = consolidate_files(dfs)
                         del dfs  # liberar lista de DataFrames intermedios
                         gc.collect()
+                        n_nuevos = len(df_nuevos)
                         # Carga incremental: acumular sobre datos existentes
                         if st.session_state.df is not None and not st.session_state.df.empty and not st.session_state.demo_loaded:
                             df_final = consolidate_files([st.session_state.df, df_nuevos])
@@ -367,11 +369,11 @@ def page_inicio():
                                 "Centro": meta.get("establecimiento", "—")[:35],
                                 "Fecha desde": meta.get("fecha_desde", "—"),
                                 "Fecha hasta": meta.get("fecha_hasta", "—"),
-                                "Registros nuevos": len(df_nuevos),
+                                "Registros nuevos": n_nuevos,
                                 "Cargado el": _dt.now().strftime("%d/%m/%Y %H:%M"),
                             })
                         _save_session()
-                        st.success(f"✅ {len(dfs)} archivo(s) procesados · **{len(df_nuevos):,}** nuevos registros · **{len(df_final):,}** registros acumulados en total")
+                        st.success(f"✅ {n_archivos} archivo(s) procesados · **{n_nuevos:,}** nuevos registros · **{len(df_final):,}** registros acumulados en total")
                         if github_configured():
                             st.info("💾 Datos guardados en GitHub — cualquier usuario verá estos datos al abrir la app.", icon="✅")
                         else:

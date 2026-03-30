@@ -951,7 +951,27 @@ def page_analisis(dff: pd.DataFrame):
             import plotly.express as px
             from src.kpis import calc_no_show, calc_efectividad
 
-            dff_cit = dff[dff["ESTADO CUPO"] == "CITADO"]
+            # ── Filtro de grupos etarios ───────────────────────────────
+            # Orden definido por rangos (no alfabético)
+            _orden_ge = ["0-5", "6-14", "15-29", "30-64", "65+"]
+            grupos_disp = [g for g in _orden_ge if g in dff["GRUPO_ETARIO"].dropna().unique()]
+            # Si hay grupos fuera del orden conocido, los agrega al final
+            grupos_disp += [g for g in sorted(dff["GRUPO_ETARIO"].dropna().unique()) if g not in grupos_disp]
+
+            grupos_sel = st.multiselect(
+                "Filtrar Grupos Etarios",
+                options=grupos_disp,
+                default=grupos_disp,
+                key="filt_ge_det",
+                help="Selecciona uno o más grupos etarios para comparar.",
+            )
+            if not grupos_sel:
+                grupos_sel = grupos_disp
+
+            dff_cit = dff[
+                (dff["ESTADO CUPO"] == "CITADO") &
+                (dff["GRUPO_ETARIO"].isin(grupos_sel))
+            ]
             MESES_ES = {1:"Ene",2:"Feb",3:"Mar",4:"Abr",5:"May",6:"Jun",
                         7:"Jul",8:"Ago",9:"Sep",10:"Oct",11:"Nov",12:"Dic"}
 

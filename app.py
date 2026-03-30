@@ -707,8 +707,8 @@ def page_analisis(dff: pd.DataFrame):
         st.warning("Sin datos con los filtros seleccionados.")
         return
 
-    sub_tab1, sub_tab2, sub_tab3, sub_tab4 = st.tabs([
-        "Por Instrumento", "Por Tipo Atención", "Mapa de Calor", "Grupo Etario"
+    sub_tab1, sub_tab2, sub_tab3, sub_tab4, sub_tab5 = st.tabs([
+        "Por Instrumento", "Por Tipo Atención", "Mapa de Calor", "Grupo Etario", "Horario Extendido"
     ])
 
     with sub_tab1:
@@ -895,7 +895,7 @@ def page_analisis(dff: pd.DataFrame):
             with col2:
                 from src.kpis import calc_no_show
                 ta_noshow = (
-                    dff_ta.groupby("TIPO ATENCION")
+                    dff_ta.groupby("TIPO ATENCION", observed=True)
                     .apply(calc_no_show)
                     .reset_index(name="no_show")
                     .sort_values("no_show", ascending=False)
@@ -1349,6 +1349,171 @@ def page_analisis(dff: pd.DataFrame):
                 st.plotly_chart(fig_vol_ts, use_container_width=True)
         else:
             st.info("Columna de grupo etario no disponible en los datos cargados.")
+
+    with sub_tab5:
+        import plotly.graph_objects as go
+        import plotly.express as px
+        from src.kpis import calc_ocupacion, calc_no_show, calc_efectividad
+
+        MESES_ES_HE = {1:"Ene",2:"Feb",3:"Mar",4:"Abr",5:"May",6:"Jun",
+                       7:"Jul",8:"Ago",9:"Sep",10:"Oct",11:"Nov",12:"Dic"}
+
+        if "HORA_NUM" not in dff.columns:
+            st.info("Los datos cargados no contienen información de hora de inicio. Recarga los archivos IRIS para habilitar este análisis.")
+        else:
+            dff_ext = dff[dff["HORA_NUM"] >= 18].copy()
+            dff_norm = dff[dff["HORA_NUM"] < 18].copy()
+            total = len(dff)
+            n_ext = len(dff_ext)
+
+            # ── KPIs globales comparativos ─────────────────────────────
+            st.markdown("##### Comparativo: Horario Normal vs. Extendido (≥ 18:00 hrs)")
+            m1, m2, m3, m4 = st.columns(4)
+            ocu_ext  = calc_ocupacion(dff_ext)  if not dff_ext.empty  else 0.0
+            ocu_norm = calc_ocupacion(dff_norm) if not dff_norm.empty else 0.0
+            ns_ext   = calc_no_show(dff_ext)    if not dff_ext.empty  else 0.0
+            ns_norm  = calc_no_show(dff_norm)   if not dff_norm.empty else 0.0
+            ef_ext   = calc_efectividad(dff_ext)  if not dff_ext.empty  else 0.0
+            ef_norm  = calc_efectividad(dff_norm) if not dff_norm.empty else 0.0
+
+            with m1:
+                pct_ext = (n_ext / total * 100) if total > 0 else 0
+                st.metric("Cupos en Horario Extendido", f"{n_ext:,}", f"{pct_ext:.1f}% del total")
+            with m2:
+                st.metric("Ocupación Extendido", f"{ocu_ext:.1f}%",
+                          f"{ocu_ext - ocu_norm:+.1f}pp vs Normal",
+                          delta_color="normal")
+            with m3:
+                st.metric("No-Show Extendido", f"{ns_ext:.1f}%",
+                          f"{ns_ext - ns_norm:+.1f}pp vs Normal",
+                          delta_color="inverse")
+            with m4:
+                st.metric("Efectividad Extendido", f"{ef_ext:.1f}%",
+                          f"{ef_ext - ef_norm:+.1f}pp vs Normal",
+                          delta_color="normal")
+
+            # ── Gráfico comparativo barras ─────────────────────────────
+            df_comp = pd.DataFrame({
+                "Horario": ["Normal (< 18:00)", "Extendido (≥ 18:00)"],
+                "Ocupación (%)":   [ocu_norm, ocu_ext],
+                "No-Show (%)":     [ns_norm,  ns_ext],
+                "Efectividad (%)": [ef_norm,  ef_ext],
+            })
+            c1, c2, c3 = st.columns(3)
+            for col_chart, kpi_col, umbral, mejor in [
+                (c1, "Ocupación (%)",   65,  True),
+                (c2, "No-Show (%)",     10,  False),
+                (c3, "Efectividad (%)", 88,  True),
+            ]:
+                with col_chart:
+                    colores = ["#2E86C1", "#1ABC9C"]
+                    fig_c = go.Figure(go.Bar(
+                        x=df_comp["Horario"],
+                        y=df_comp[kpi_col],
+                        marker_color=colores,
+                        text=[f"{v:.1f}%" for v in df_comp[kpi_col]],
+                        textposition="outside",
+                    ))
+                    fig_c.add_hline(y=umbral, line_dash="dash",
+                                    line_color="#27AE60" if mejor else "#E74C3C",
+                                    annotation_text=f"{'Meta' if mejor else 'Umbral'} {umbral}%")
+                    fig_c.update_layout(
+                        title=kpi_col, template="plotly_white", height=320,
+                        yaxis=dict(range=[0, 110]), showlegend=False,
+                        margin=dict(l=20, r=20, t=50, b=40),
+                    )
+                    st.plotly_chart(fig_c, use_container_width=True)
+
+            # ── Ocupación extendida por Instrumento ───────────────────
+            if not dff_ext.empty and "INSTRUMENTO" in dff_ext.columns:
+                st.markdown("##### Ocupación en Horario Extendido por Instrumento")
+                inst_ext = (
+                    dff_ext.groupby("INSTRUMENTO", observed=True)
+                    .apply(calc_ocupacion)
+                    .reset_index(name="ocupacion")
+                    .sort_values("ocupacion", ascending=False)
+                )
+                if not inst_ext.empty:
+                    colors_ie = [
+                        "#27AE60" if v >= 65 else "#F39C12" if v >= 50 else "#E74C3C"
+                        for v in inst_ext["ocupacion"]
+                    ]
+                    fig_ie = go.Figure(go.Bar(
+                        x=inst_ext["ocupacion"],
+                        y=inst_ext["INSTRUMENTO"].str[:30],
+                        orientation="h",
+                        marker_color=colors_ie,
+                        text=[f"{v:.1f}%" for v in inst_ext["ocupacion"]],
+                        textposition="outside",
+                        hovertemplate="<b>%{y}</b><br>Ocupación extendida: %{x:.1f}%<extra></extra>",
+                    ))
+                    fig_ie.add_vline(x=50, line_dash="dash", line_color="#F39C12",
+                                     annotation_text="Meta 50%")
+                    fig_ie.update_layout(
+                        title="Ocupación Horario Extendido por Instrumento (%)",
+                        template="plotly_white",
+                        height=max(350, len(inst_ext) * 32 + 80),
+                        margin=dict(l=10, r=60, t=50, b=40),
+                        xaxis=dict(range=[0, 110], title="Ocupación (%)"),
+                    )
+                    st.plotly_chart(fig_ie, use_container_width=True)
+
+            # ── Serie temporal: ocupación extendida por mes ───────────
+            if "MES_NUM" in dff.columns and dff["MES_NUM"].nunique() >= 2:
+                st.markdown("##### Evolución Mensual — Horario Extendido vs Normal")
+
+                rows_ts = []
+                for mes, grp in dff.groupby("MES_NUM", observed=True):
+                    g_ext  = grp[grp["HORA_NUM"] >= 18]
+                    g_norm = grp[grp["HORA_NUM"] <  18]
+                    rows_ts.append({
+                        "mes": int(mes),
+                        "mes_label": MESES_ES_HE.get(int(mes), str(mes)),
+                        "Extendido": calc_ocupacion(g_ext)  if not g_ext.empty  else 0.0,
+                        "Normal":    calc_ocupacion(g_norm) if not g_norm.empty else 0.0,
+                    })
+                df_ts_he = pd.DataFrame(rows_ts).sort_values("mes")
+
+                fig_ts_he = px.line(
+                    df_ts_he.melt(id_vars=["mes", "mes_label"],
+                                  value_vars=["Extendido", "Normal"],
+                                  var_name="Horario", value_name="Ocupación (%)"),
+                    x="mes_label", y="Ocupación (%)", color="Horario",
+                    markers=True,
+                    color_discrete_map={"Extendido": "#1ABC9C", "Normal": "#2E86C1"},
+                    labels={"mes_label": "Mes"},
+                    title="Ocupación por Mes: Extendido vs Normal",
+                    template="plotly_white", height=380,
+                )
+                fig_ts_he.add_hline(y=50, line_dash="dash", line_color="#F39C12",
+                                    annotation_text="Meta Extendido 50%", annotation_position="bottom right")
+                fig_ts_he.add_hline(y=65, line_dash="dot", line_color="#27AE60",
+                                    annotation_text="Meta Normal 65%", annotation_position="bottom right")
+                fig_ts_he.update_layout(margin=dict(l=20, r=20, t=50, b=40))
+                st.plotly_chart(fig_ts_he, use_container_width=True)
+
+            # ── Distribución de cupos por hora ────────────────────────
+            st.markdown("##### Distribución de Cupos por Hora del Día")
+            hora_counts = (
+                dff.groupby(dff["HORA_NUM"].dropna().astype(int), observed=True)
+                .size()
+                .reset_index(name="cupos")
+            )
+            hora_counts.columns = ["hora", "cupos"]
+            hora_counts["tipo"] = hora_counts["hora"].apply(
+                lambda h: "Extendido (≥ 18:00)" if h >= 18 else "Normal"
+            )
+            fig_horas = px.bar(
+                hora_counts, x="hora", y="cupos", color="tipo",
+                color_discrete_map={"Extendido (≥ 18:00)": "#1ABC9C", "Normal": "#2E86C1"},
+                labels={"hora": "Hora de Inicio", "cupos": "Cantidad de Cupos", "tipo": "Horario"},
+                title="Cupos por Hora del Día",
+                template="plotly_white", height=360,
+            )
+            fig_horas.add_vline(x=17.5, line_dash="dash", line_color="#E74C3C",
+                                annotation_text="18:00 hrs", annotation_position="top right")
+            fig_horas.update_layout(margin=dict(l=20, r=20, t=50, b=40))
+            st.plotly_chart(fig_horas, use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────

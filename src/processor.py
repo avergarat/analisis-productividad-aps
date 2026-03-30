@@ -128,6 +128,23 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
         if "MES_NUM" not in df.columns:
             df["MES_NUM"] = df["FECHA"].dt.month
 
+    # HORA_NUM: derivar desde HORA INICIO cuando no existe como columna propia
+    # (algunos exports IRIS incluyen HORA INICIO/TERMINO en vez de HORA_NUM directamente)
+    if "HORA_NUM" not in df.columns and "HORA INICIO" in df.columns:
+        def _hora_a_num(v):
+            try:
+                import datetime as _dt
+                if pd.isna(v):
+                    return np.nan
+                if isinstance(v, _dt.time):
+                    return v.hour + v.minute / 60
+                s = str(v).strip()
+                parts = s.replace(".", ":").split(":")
+                return int(parts[0]) + int(parts[1]) / 60
+            except Exception:
+                return np.nan
+        df["HORA_NUM"] = df["HORA INICIO"].apply(_hora_a_num)
+
     # SECTOR: normalizar valores no estándar → NO INFORMADO
     if "SECTOR" in df.columns:
         df["SECTOR"] = df["SECTOR"].fillna("NO INFORMADO").str.strip().str.upper()

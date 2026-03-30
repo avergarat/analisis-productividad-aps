@@ -310,7 +310,7 @@ def load_filtered(
     sectores:       list | None = None,
     tipos_atencion: list | None = None,
     tipos_cupo:     list | None = None,
-    max_rows: int = 600_000,
+    max_rows: int = 1_000_000,
 ) -> tuple[pd.DataFrame | None, str]:
     """
     Carga desde BigQuery solo las filas que coinciden con los filtros activos.

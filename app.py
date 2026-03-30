@@ -324,7 +324,7 @@ def render_sidebar() -> dict:
                 n_total = st.session_state.get("bq_total_registros", 0)
                 st.caption(f"🗄️ **{n_total:,}** registros en BigQuery")
                 if st.button("📥 Cargar datos filtrados", type="primary",
-                             width="stretch", key="btn_bq_load"):
+                             use_container_width=True, key="btn_bq_load"):
                     with st.spinner("Consultando BigQuery..."):
                         df_bq, msg_bq = bq.load_filtered(
                             centros=filtros.get("centros"),
@@ -346,7 +346,7 @@ def render_sidebar() -> dict:
                 if bq.bq_configured():
                     n_total = st.session_state.get("bq_total_registros", 0)
                     st.caption(f"🗄️ Total en BQ: **{n_total:,}**")
-                    if st.button("🔄 Recargar desde BigQuery", width="stretch",
+                    if st.button("🔄 Recargar desde BigQuery", use_container_width=True,
                                  key="btn_bq_reload"):
                         st.session_state.df = None
                         st.rerun()
@@ -409,7 +409,7 @@ def page_inicio():
             )
 
             if uploaded_files:
-                if st.button("⚙️ Procesar archivos", type="primary", width="stretch"):
+                if st.button("⚙️ Procesar archivos", type="primary", use_container_width=True):
                     dfs = []
                     meta_list = []
                     errores_globales = []
@@ -452,13 +452,21 @@ def page_inicio():
                                 st.warning(f"BigQuery: {msg_bq}", icon="⚠️")
 
                         # ── Mantener en sesión para análisis inmediato ───────
-                        if st.session_state.df is not None and not st.session_state.df.empty and not st.session_state.demo_loaded:
-                            df_final = consolidate_files([st.session_state.df, df_nuevos])
+                        if bq.bq_configured() and ok_bq:
+                            # BQ es la fuente de verdad: no acumular en RAM
+                            # Solo guardamos los nuevos para visualización inmediata
+                            st.session_state.df = df_nuevos
                             del df_nuevos
+                            df_final = st.session_state.df
                         else:
-                            df_final = df_nuevos
+                            # Sin BQ: acumular en RAM (comportamiento original)
+                            if st.session_state.df is not None and not st.session_state.df.empty and not st.session_state.demo_loaded:
+                                df_final = consolidate_files([st.session_state.df, df_nuevos])
+                                del df_nuevos
+                            else:
+                                df_final = df_nuevos
+                            st.session_state.df = df_final
                         gc.collect()
-                        st.session_state.df = df_final
                         st.session_state.metadata_list += meta_list
                         st.session_state.archivos_cargados += [f.name for f in uploaded_files]
                         st.session_state.demo_loaded = False
@@ -473,7 +481,8 @@ def page_inicio():
                                 "Cargado el": _dt.now().strftime("%d/%m/%Y %H:%M"),
                             })
                         _save_session()  # fallback /tmp+GitHub si BQ no configurado
-                        st.success(f"✅ {n_archivos} archivo(s) procesados · **{n_nuevos:,}** nuevos registros · **{len(df_final):,}** en sesión actual")
+                        n_bq_total = st.session_state.get("bq_total_registros", 0)
+                        st.success(f"✅ {n_archivos} archivo(s) procesados · **{n_nuevos:,}** nuevos registros · **{n_bq_total:,}** total en BigQuery")
                         if not bq.bq_configured():
                             if len(df_final) > 800_000:
                                 st.warning(
@@ -498,7 +507,7 @@ def page_inicio():
                 key="restore_csv",
             )
             if uploaded_csv:
-                if st.button("📥 Restaurar datos guardados", type="primary", width="stretch"):
+                if st.button("📥 Restaurar datos guardados", type="primary", use_container_width=True):
                     with st.spinner("Restaurando datos..."):
                         df_rest = pd.read_csv(uploaded_csv)
                         # Restaurar tipos de columnas
@@ -530,7 +539,7 @@ def page_inicio():
             reales del CESFAM N°5 (2025) para explorar todas las funcionalidades.
             """)
             n_demo = st.slider("Número de registros demo", 20_000, 150_000, 80_000, 10_000)
-            if st.button("🎲 Cargar datos demo", type="secondary", width="stretch"):
+            if st.button("🎲 Cargar datos demo", type="secondary", use_container_width=True):
                 with st.spinner("Generando datos demo..."):
                     df_demo = generate_demo_data(n_records=n_demo)
                     st.session_state.df = df_demo
@@ -594,7 +603,7 @@ def page_inicio():
             # ── Descarga completa desde BQ ──────────────────────────────────
             st.markdown("##### 💾 Descargar datos consolidados")
             st.caption("Descarga todos los datos almacenados en BigQuery como CSV.")
-            if st.button("⬇️ Preparar descarga completa desde BigQuery", width="stretch"):
+            if st.button("⬇️ Preparar descarga completa desde BigQuery", use_container_width=True):
                 with st.spinner("Exportando desde BigQuery... (puede tomar unos segundos)"):
                     csv_bq = bq.export_csv_bytes()
                 if csv_bq:
@@ -603,12 +612,12 @@ def page_inicio():
                         data=csv_bq,
                         file_name="datos_consolidados_aps.csv",
                         mime="text/csv",
-                        width="stretch",
+                        use_container_width=True,
                     )
                 else:
                     st.error("No se pudo exportar desde BigQuery.")
 
-            if st.button("🗑️ Limpiar TODOS los datos de BigQuery", type="secondary", width="stretch"):
+            if st.button("🗑️ Limpiar TODOS los datos de BigQuery", type="secondary", use_container_width=True):
                 ok_del, msg_del = bq.delete_all_data()
                 if ok_del:
                     st.session_state.df = None
@@ -659,7 +668,7 @@ def page_inicio():
                     width="stretch",
                     help="Descarga los datos actualmente cargados en sesión.",
                 )
-                if st.button("🗑️ Limpiar todos los datos", type="secondary", width="stretch"):
+                if st.button("🗑️ Limpiar todos los datos", type="secondary", use_container_width=True):
                     st.session_state.df = None
                     st.session_state.metadata_list = []
                     st.session_state.archivos_cargados = []

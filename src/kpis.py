@@ -316,12 +316,15 @@ def kpis_por_instrumento(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for instrumento, grp in df.groupby("INSTRUMENTO", observed=True):
         row = {"instrumento": instrumento}
-        row["ocupacion"] = calc_ocupacion(grp)
-        row["no_show"] = calc_no_show(grp)
+        row["total"]       = len(grp)
+        row["citados"]     = int((grp["ESTADO CUPO"] == "CITADO").sum())
+        row["disponibles"] = int((grp["ESTADO CUPO"] == "DISPONIBLE").sum())
+        row["bloqueados"]  = int((grp["TIPO CUPO"] == "BLOQUEADO").sum()) if "TIPO CUPO" in grp.columns else 0
+        row["atendidos"]   = int((grp["ESTADO CITA"] == "ATENDIDO").sum()) if "ESTADO CITA" in grp.columns else 0
+        row["ocupacion"]   = calc_ocupacion(grp)
+        row["no_show"]     = calc_no_show(grp)
         row["efectividad"] = calc_efectividad(grp)
         row["rendimiento"] = calc_rendimiento(grp)
-        row["total"] = len(grp)
-        row["citados"] = (grp["ESTADO CUPO"] == "CITADO").sum()
         rows.append(row)
 
     return pd.DataFrame(rows).sort_values("ocupacion", ascending=False)
@@ -336,12 +339,16 @@ def kpis_por_centro(df: pd.DataFrame) -> pd.DataFrame:
     rows = []
     for centro, grp in df.groupby("ESTABLECIMIENTO", observed=True):
         row = {"centro": centro}
-        row["ocupacion"] = calc_ocupacion(grp)
-        row["no_show"] = calc_no_show(grp)
-        row["bloqueo"] = calc_bloqueo(grp)
+        row["total"]       = len(grp)
+        row["citados"]     = int((grp["ESTADO CUPO"] == "CITADO").sum())
+        row["disponibles"] = int((grp["ESTADO CUPO"] == "DISPONIBLE").sum())
+        row["bloqueados"]  = int((grp["TIPO CUPO"] == "BLOQUEADO").sum()) if "TIPO CUPO" in grp.columns else 0
+        row["atendidos"]   = int((grp["ESTADO CITA"] == "ATENDIDO").sum()) if "ESTADO CITA" in grp.columns else 0
+        row["ocupacion"]   = calc_ocupacion(grp)
+        row["no_show"]     = calc_no_show(grp)
+        row["bloqueo"]     = calc_bloqueo(grp)
         row["efectividad"] = calc_efectividad(grp)
         row["rendimiento"] = calc_rendimiento(grp)
-        row["total"] = len(grp)
         rows.append(row)
 
     return pd.DataFrame(rows).sort_values("ocupacion", ascending=False)
@@ -399,10 +406,11 @@ def kpis_por_tipo_atencion(df: pd.DataFrame) -> pd.DataFrame:
         row["rendimiento"] = calc_rendimiento(grp)
         row["sobrecupo"] = calc_sobrecupo(grp)
         row["agendamiento_remoto"] = calc_agendamiento_remoto(grp)
-        row["total"] = len(grp)
-        row["citados"] = int((grp["ESTADO CUPO"] == "CITADO").sum())
+        row["total"]       = len(grp)
+        row["citados"]     = int((grp["ESTADO CUPO"] == "CITADO").sum())
         row["disponibles"] = int((grp["ESTADO CUPO"] == "DISPONIBLE").sum())
-        row["bloqueados"] = int((grp["ESTADO CUPO"] == "BLOQUEADO").sum())
+        row["bloqueados"]  = int((grp["TIPO CUPO"] == "BLOQUEADO").sum()) if "TIPO CUPO" in grp.columns else 0
+        row["atendidos"]   = int((grp["ESTADO CITA"] == "ATENDIDO").sum()) if "ESTADO CITA" in grp.columns else 0
         rows.append(row)
 
     return pd.DataFrame(rows).sort_values("total", ascending=False)

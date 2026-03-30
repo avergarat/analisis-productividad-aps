@@ -262,7 +262,7 @@ def render_sidebar() -> dict:
         nav = st.radio(
             "Navegación",
             ["🏠 Inicio y Carga", "📊 Dashboard KPIs", "📈 Evolución Temporal",
-             "🔍 Análisis Detallado", "⚠️ Alertas y Brechas"],
+             "🔍 Análisis Detallado", "⚠️ Alertas y Brechas", "📋 Informe por Centro"],
             label_visibility="collapsed",
         )
         st.divider()
@@ -952,8 +952,11 @@ def page_analisis(dff: pd.DataFrame):
                 df_disp["Rendim. (min)"]  = df_disp["rendimiento"].round(1)
                 df_disp["Total"]          = df_disp["total"].apply(lambda v: f"{v:,}")
                 df_disp["Citados"]        = df_disp["citados"].apply(lambda v: f"{v:,}")
+                df_disp["Disponibles"]    = df_disp["disponibles"].apply(lambda v: f"{v:,}")
+                df_disp["Bloqueados"]     = df_disp["bloqueados"].apply(lambda v: f"{v:,}")
+                df_disp["Atendidos"]      = df_disp["atendidos"].apply(lambda v: f"{v:,}")
                 st.dataframe(
-                    df_disp[["instrumento","Total","Citados","Ocupación","No-Show","Efectividad","Rendim. (min)"]].rename(columns={"instrumento":"Instrumento"}),
+                    df_disp[["instrumento","Total","Citados","Disponibles","Bloqueados","Atendidos","Ocupación","No-Show","Efectividad","Rendim. (min)"]].rename(columns={"instrumento":"Instrumento"}),
                     width="stretch", hide_index=True
                 )
 
@@ -1123,10 +1126,11 @@ def page_analisis(dff: pd.DataFrame):
                 df_kpis_disp["Total"] = df_kpis_disp["total"].apply(lambda v: f"{v:,}")
                 df_kpis_disp["Citados"] = df_kpis_disp["citados"].apply(lambda v: f"{v:,}")
                 df_kpis_disp["Disponibles"] = df_kpis_disp["disponibles"].apply(lambda v: f"{v:,}")
-                df_kpis_disp["Bloqueados"] = df_kpis_disp["bloqueados"].apply(lambda v: f"{v:,}")
+                df_kpis_disp["Bloqueados"]  = df_kpis_disp["bloqueados"].apply(lambda v: f"{v:,}")
+                df_kpis_disp["Atendidos"]   = df_kpis_disp["atendidos"].apply(lambda v: f"{v:,}") if "atendidos" in df_kpis_disp.columns else "—"
 
                 cols_show = [
-                    "tipo_atencion", "Total", "Citados", "Disponibles", "Bloqueados",
+                    "tipo_atencion", "Total", "Citados", "Disponibles", "Bloqueados", "Atendidos",
                     "Ocupación", "No-Show", "Efectividad", "Bloqueo",
                     "Sobrecupo", "Ag. Remoto", "Rendim. (min)"
                 ]
@@ -1766,10 +1770,22 @@ def page_alertas(dff: pd.DataFrame):
 
         st.markdown("##### KPIs por Centro")
         df_c_display = df_centros.copy()
-        df_c_display.columns = [
-            "Centro", "Ocupación %", "No-Show %", "Bloqueo %",
-            "Efectividad %", "Rendimiento (min)", "Total Registros"
-        ]
+        # Renombrar con nombres legibles (orden debe coincidir con kpis_por_centro)
+        rename_centro = {
+            "centro": "Centro",
+            "total": "Total Registros",
+            "citados": "Citados",
+            "disponibles": "Disponibles",
+            "bloqueados": "Bloqueados",
+            "atendidos": "Atendidos",
+            "ocupacion": "Ocupación %",
+            "no_show": "No-Show %",
+            "bloqueo": "Bloqueo %",
+            "efectividad": "Efectividad %",
+            "rendimiento": "Rendimiento (min)",
+        }
+        df_c_display = df_c_display.rename(columns=rename_centro)
+
         def color_ocupacion(val):
             if isinstance(val, float):
                 if val >= 65:
@@ -1780,15 +1796,632 @@ def page_alertas(dff: pd.DataFrame):
                     return "color: #E74C3C; font-weight: bold"
             return ""
 
-        styled_c = df_c_display.style.map(color_ocupacion, subset=["Ocupación %"]).format({
-            "Ocupación %": "{:.1f}",
-            "No-Show %": "{:.1f}",
-            "Bloqueo %": "{:.1f}",
-            "Efectividad %": "{:.1f}",
+        fmt = {
+            "Ocupación %": "{:.1f}", "No-Show %": "{:.1f}",
+            "Bloqueo %": "{:.1f}", "Efectividad %": "{:.1f}",
             "Rendimiento (min)": "{:.1f}",
-            "Total Registros": "{:,.0f}",
-        })
+            "Total Registros": "{:,.0f}", "Citados": "{:,.0f}",
+            "Disponibles": "{:,.0f}", "Bloqueados": "{:,.0f}", "Atendidos": "{:,.0f}",
+        }
+        fmt_valido = {k: v for k, v in fmt.items() if k in df_c_display.columns}
+        styled_c = df_c_display.style.map(color_ocupacion, subset=["Ocupación %"]).format(fmt_valido)
         st.dataframe(styled_c, width="stretch", hide_index=True)
+
+
+# ─────────────────────────────────────────────────────────────
+# PÁGINA 6: INFORME POR CENTRO DE SALUD
+# ─────────────────────────────────────────────────────────────
+def page_informe_centro(dff: pd.DataFrame):
+    """Informe analítico completo por CESFAM/Centro de Salud seleccionado."""
+    import plotly.graph_objects as go
+    from src.kpis import (
+        semaforo, calc_ocupacion, calc_no_show, calc_bloqueo,
+        calc_efectividad, calc_rendimiento, calc_sobrecupo,
+        calc_cobertura_sectorial, calc_agendamiento_remoto,
+        calc_ocupacion_extendida,
+    )
+
+    st.markdown("""
+    <div class="main-header">
+        <h1>📋 Informe Analítico por Centro de Salud</h1>
+        <p>Reporte integral de productividad · Análisis descriptivo de todos los indicadores</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if dff.empty:
+        st.warning("Sin datos con los filtros seleccionados.")
+        return
+
+    if "ESTABLECIMIENTO" not in dff.columns:
+        st.warning("Los datos no contienen la columna ESTABLECIMIENTO.")
+        return
+
+    # ── Selector de Centro ────────────────────────────────────────────────────
+    centros_disponibles = sorted(dff["ESTABLECIMIENTO"].dropna().unique().tolist())
+    centro_sel = st.selectbox(
+        "Seleccionar Centro de Salud para generar informe",
+        centros_disponibles,
+        key="informe_centro_sel",
+    )
+
+    if not centro_sel:
+        return
+
+    df_centro = dff[dff["ESTABLECIMIENTO"] == centro_sel].copy()
+    if df_centro.empty:
+        st.warning(f"Sin registros para **{centro_sel}**.")
+        return
+
+    # ── Variables base ────────────────────────────────────────────────────────
+    total_registros = len(df_centro)
+    citados = int((df_centro["ESTADO CUPO"] == "CITADO").sum())
+    disponibles = int((df_centro["ESTADO CUPO"] == "DISPONIBLE").sum())
+    bloqueados = int((df_centro["TIPO CUPO"] == "BLOQUEADO").sum()) if "TIPO CUPO" in df_centro.columns else 0
+    atendidos = int((df_centro["ESTADO CITA"] == "ATENDIDO").sum()) if "ESTADO CITA" in df_centro.columns else 0
+
+    n_meses = df_centro["MES_NUM"].nunique() if "MES_NUM" in df_centro.columns else 0
+    rango_meses = ""
+    if "MES_NUM" in df_centro.columns and n_meses > 0:
+        MESES_N = {1:"Enero",2:"Febrero",3:"Marzo",4:"Abril",5:"Mayo",6:"Junio",
+                   7:"Julio",8:"Agosto",9:"Septiembre",10:"Octubre",11:"Noviembre",12:"Diciembre"}
+        meses_ord = sorted(df_centro["MES_NUM"].dropna().unique().tolist())
+        rango_meses = f"{MESES_N.get(int(meses_ord[0]), '?')} a {MESES_N.get(int(meses_ord[-1]), '?')}"
+
+    # ── Calcular todos los KPIs del centro ────────────────────────────────────
+    kpis = calculate_all_kpis(df_centro)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 1: RESUMEN EJECUTIVO
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown(f"## 1. Resumen Ejecutivo — {centro_sel}")
+    st.markdown(
+        f"El presente informe analiza la productividad del centro **{centro_sel}** "
+        f"durante el período **{rango_meses}** ({n_meses} meses), "
+        f"abarcando un total de **{total_registros:,}** registros de cupos programados en el sistema IRIS. "
+        f"De estos, **{citados:,}** corresponden a cupos citados, **{disponibles:,}** permanecieron disponibles "
+        f"(sin asignar), **{bloqueados:,}** fueron bloqueados administrativamente y **{atendidos:,}** "
+        f"registraron atención efectiva."
+    )
+
+    # Tarjetas resumen
+    c1, c2, c3, c4, c5 = st.columns(5)
+    c1.metric("Total Registros", f"{total_registros:,}")
+    c2.metric("Citados", f"{citados:,}")
+    c3.metric("Disponibles", f"{disponibles:,}")
+    c4.metric("Bloqueados", f"{bloqueados:,}")
+    c5.metric("Atendidos", f"{atendidos:,}")
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 2: SEMÁFORO DE INDICADORES
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 2. Semáforo de Indicadores")
+    st.markdown(
+        "A continuación se presenta el estado de los **10 indicadores clave** del modelo de "
+        "productividad APS. Cada indicador se clasifica según semáforo: "
+        "🟢 dentro de meta, 🟡 en zona de observación, 🔴 brecha crítica."
+    )
+
+    kpi_order = [
+        ("ocupacion", "Tasa de Ocupación"),
+        ("no_show", "Tasa de No-Show"),
+        ("bloqueo", "Tasa de Bloqueo"),
+        ("efectividad", "Efectividad de Cita"),
+        ("rendimiento", "Rendimiento Promedio"),
+        ("sobrecupo", "Cupos Sobrecupo"),
+        ("cobertura_sectorial", "Cobertura Sectorial"),
+        ("agendamiento_remoto", "Agendamiento Remoto"),
+        ("variacion_mensual", "Variación Mensual"),
+        ("ocupacion_extendida", "Ocupación Horario Extendido"),
+    ]
+    cols_kpi = st.columns(5)
+    for i, (key, label) in enumerate(kpi_order):
+        k = kpis.get(key, {})
+        valor = k.get("valor", 0)
+        unidad = k.get("unidad", "%")
+        sem = k.get("semaforo", "gris")
+        icon = semaforo_icon(sem)
+        with cols_kpi[i % 5]:
+            st.metric(label=f"{icon} {label}", value=f"{valor:.1f} {unidad}")
+
+    # Tabla semáforo detallada
+    df_sem = build_semaforo_table(kpis)
+    display_cols = ["Estado", "Indicador", "Valor", "Meta", "Alerta si", "Descripción"]
+    def _highlight_sem(row):
+        if row.get("_semaforo") == "rojo":
+            return ["background-color: #FDEDEC"] * len(row)
+        elif row.get("_semaforo") == "amarillo":
+            return ["background-color: #FEF9E7"] * len(row)
+        return [""] * len(row)
+    styled_sem = (df_sem[display_cols + ["_semaforo"]]
+                  .style.apply(_highlight_sem, axis=1).hide(axis="index"))
+    st.dataframe(styled_sem, width="stretch", hide_index=True,
+                 column_config={"_semaforo": None})
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 3: DISTRIBUCIÓN DE CUPOS
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 3. Distribución de Estado de Cupos")
+    st.markdown(
+        "**Gráfico 1.** Composición de cupos según su estado final "
+        "(Citado, Disponible, Bloqueado). Este gráfico permite identificar rápidamente "
+        "qué proporción de la oferta programada fue efectivamente utilizada versus "
+        "la que quedó sin asignar o fue retirada por bloqueo administrativo. "
+        "Se calcula como el conteo absoluto de registros agrupados por el campo "
+        "`ESTADO CUPO` del sistema IRIS."
+    )
+    fig_cupos = chart_estado_cupos(df_centro)
+    fig_cupos.update_layout(height=450, width=None)
+    st.plotly_chart(fig_cupos, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 4: TASA DE OCUPACIÓN
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 4. Análisis de Tasa de Ocupación")
+    v_ocu = kpis.get("ocupacion", {}).get("valor", 0)
+    sem_ocu = semaforo(v_ocu, "ocupacion")
+    st.markdown(
+        f"La **Tasa de Ocupación** mide el porcentaje de cupos que fueron asignados a un paciente "
+        f"respecto del total de cupos disponibles para atención. Se calcula como: "
+        f"`Citados ÷ (Citados + Disponibles) × 100`. "
+        f"El centro **{centro_sel}** registra una ocupación de **{v_ocu:.1f}%**, "
+        f"clasificada como **{'dentro de meta (≥65%)' if sem_ocu == 'verde' else 'en observación (50-65%)' if sem_ocu == 'amarillo' else 'brecha crítica (<50%)'}**. "
+        f"La meta institucional es ≥ 65% y el umbral de alerta es < 50%."
+    )
+
+    if "MES_NUM" in df_centro.columns and n_meses >= 2:
+        # KPIs por mes del centro
+        df_meses_c = _kpis_por_mes_centro(df_centro)
+        if not df_meses_c.empty:
+            st.markdown(
+                "**Gráfico 2.** Evolución mensual de la Tasa de Ocupación. "
+                "Muestra la tendencia mes a mes, permitiendo identificar períodos "
+                "de subutilización o mejoras sostenidas. La línea punteada verde "
+                "indica la meta (65%) y la roja el umbral de alerta (50%)."
+            )
+            fig_ocu = chart_evolucion_mensual(
+                df_meses_c, "ocupacion", "Tasa de Ocupación",
+                umbral_ok=65, umbral_alerta=50
+            )
+            fig_ocu.update_layout(height=450)
+            st.plotly_chart(fig_ocu, use_container_width=True)
+
+    # Ocupación por instrumento
+    df_inst_c = kpis_por_instrumento(df_centro)
+    if not df_inst_c.empty:
+        st.markdown(
+            "**Gráfico 3.** Ocupación desglosada por instrumento (profesional). "
+            "Permite comparar el nivel de aprovechamiento de la agenda entre los distintos "
+            "tipos de profesionales del centro. Se calcula como `Citados ÷ (Citados + Disponibles) × 100` "
+            "para cada instrumento por separado."
+        )
+        df_plot = df_inst_c.sort_values("ocupacion")
+        colors_ocu = [
+            "#27AE60" if v >= 65 else "#F39C12" if v >= 50 else "#E74C3C"
+            for v in df_plot["ocupacion"]
+        ]
+        fig_ocu_inst = go.Figure(go.Bar(
+            x=df_plot["ocupacion"], y=df_plot["instrumento"].str[:30],
+            orientation="h", marker_color=colors_ocu,
+            text=[f"{v:.1f}%" for v in df_plot["ocupacion"]],
+            textposition="outside",
+            hovertemplate="<b>%{y}</b><br>Ocupación: %{x:.1f}%<extra></extra>",
+        ))
+        fig_ocu_inst.add_vline(x=65, line_dash="dash", line_color="#27AE60",
+                               annotation_text="Meta 65%")
+        fig_ocu_inst.update_layout(
+            title="Ocupación por Instrumento/Profesional",
+            height=max(400, len(df_plot) * 40 + 100),
+            xaxis=dict(title="Ocupación (%)", range=[0, 105]),
+            yaxis=dict(title=""), template="plotly_white",
+            margin=dict(l=40, r=20, t=60, b=40),
+        )
+        st.plotly_chart(fig_ocu_inst, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 5: TASA DE NO-SHOW
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 5. Análisis de Tasa de No-Show (Inasistencia)")
+    v_ns = kpis.get("no_show", {}).get("valor", 0)
+    sem_ns = semaforo(v_ns, "no_show")
+    st.markdown(
+        f"La **Tasa de No-Show** representa el porcentaje de pacientes que, habiendo sido citados, "
+        f"no asistieron a su atención. Se calcula como: "
+        f"`(Citados − Completados) ÷ Citados × 100`. "
+        f"El centro **{centro_sel}** presenta un No-Show de **{v_ns:.1f}%**, "
+        f"clasificado como **{'aceptable (≤10%)' if sem_ns == 'verde' else 'en observación (10-15%)' if sem_ns == 'amarillo' else 'crítico (>15%)'}**. "
+        f"Cada punto porcentual de No-Show representa horas clínicas perdidas y pacientes sin atención."
+    )
+
+    if "MES_NUM" in df_centro.columns and n_meses >= 2:
+        df_meses_c = _kpis_por_mes_centro(df_centro)
+        if not df_meses_c.empty:
+            st.markdown(
+                "**Gráfico 4.** Evolución mensual de la Tasa de No-Show comparada con el umbral "
+                "institucional (10%). Las barras cambian de color según gravedad: "
+                "verde (≤10%), amarillo (10-15%), rojo (>15%)."
+            )
+            fig_ns = chart_noshow_vs_umbral(df_meses_c)
+            fig_ns.update_layout(height=450)
+            st.plotly_chart(fig_ns, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 6: TASA DE BLOQUEO
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 6. Análisis de Tasa de Bloqueo")
+    v_bloq = kpis.get("bloqueo", {}).get("valor", 0)
+    sem_bloq = semaforo(v_bloq, "bloqueo")
+    st.markdown(
+        f"La **Tasa de Bloqueo** mide el porcentaje de cupos que fueron bloqueados "
+        f"administrativamente (vacaciones, capacitaciones, fallas de equipos, reuniones, etc.), "
+        f"reduciendo la capacidad real de atención del centro. Se calcula como: "
+        f"`Bloqueados ÷ Total cupos × 100`. "
+        f"El centro **{centro_sel}** registra un bloqueo de **{v_bloq:.1f}%**, "
+        f"clasificado como **{'aceptable (≤10%)' if sem_bloq == 'verde' else 'en observación (10-15%)' if sem_bloq == 'amarillo' else 'excesivo (>15%)'}**."
+    )
+
+    if "MES_NUM" in df_centro.columns and n_meses >= 2:
+        df_meses_c = _kpis_por_mes_centro(df_centro)
+        if not df_meses_c.empty:
+            st.markdown(
+                "**Gráfico 5.** Evolución mensual de la Tasa de Bloqueo. "
+                "Permite detectar meses con mayor pérdida de capacidad instalada "
+                "por causas administrativas. La meta es mantener el bloqueo ≤ 10%."
+            )
+            fig_bloq = chart_evolucion_mensual(
+                df_meses_c, "bloqueo", "Tasa de Bloqueo",
+                umbral_ok=10, umbral_alerta=15
+            )
+            fig_bloq.update_layout(height=450)
+            st.plotly_chart(fig_bloq, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 7: EFECTIVIDAD DE CITA
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 7. Análisis de Efectividad de Cita")
+    v_efec = kpis.get("efectividad", {}).get("valor", 0)
+    sem_efec = semaforo(v_efec, "efectividad")
+    st.markdown(
+        f"La **Efectividad de Cita** mide el porcentaje de citas que fueron completadas "
+        f"exitosamente respecto del total de citas agendadas. Se calcula como: "
+        f"`Completados ÷ Citados × 100`. "
+        f"El centro **{centro_sel}** alcanza una efectividad de **{v_efec:.1f}%**, "
+        f"clasificada como **{'óptima (≥88%)' if sem_efec == 'verde' else 'en observación (80-88%)' if sem_efec == 'amarillo' else 'baja (<80%)'}**. "
+        f"Una efectividad baja puede indicar problemas de confirmación de citas o verificación "
+        f"de asistencia."
+    )
+
+    if "MES_NUM" in df_centro.columns and n_meses >= 2:
+        df_meses_c = _kpis_por_mes_centro(df_centro)
+        if not df_meses_c.empty:
+            st.markdown(
+                "**Gráfico 6.** Evolución mensual de la Efectividad de Cita. "
+                "Muestra la proporción de citas que terminaron en atención efectiva mes a mes. "
+                "La meta es ≥ 88% y el umbral de alerta es < 80%."
+            )
+            fig_efec = chart_evolucion_mensual(
+                df_meses_c, "efectividad", "Efectividad de Cita",
+                umbral_ok=88, umbral_alerta=80
+            )
+            fig_efec.update_layout(height=450)
+            st.plotly_chart(fig_efec, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 8: RENDIMIENTO POR INSTRUMENTO
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 8. Rendimiento Promedio por Instrumento")
+    v_rend = kpis.get("rendimiento", {}).get("valor", 0)
+    st.markdown(
+        f"El **Rendimiento Promedio** indica la cantidad de minutos que en promedio dura "
+        f"cada atención por profesional. Se calcula como el promedio del campo `RENDIMIENTO` "
+        f"del sistema IRIS, que registra los minutos programados por cupo. "
+        f"El centro **{centro_sel}** presenta un rendimiento promedio de **{v_rend:.1f} min/atención**. "
+        f"Valores muy bajos pueden indicar atenciones superficiales; valores muy altos pueden "
+        f"significar ineficiencia o complejidad clínica elevada."
+    )
+
+    st.markdown(
+        "**Gráfico 7.** Rendimiento promedio desglosado por instrumento (tipo de profesional). "
+        "Muestra la cantidad de minutos que cada profesional destina en promedio por atención, "
+        "calculado como `Promedio(RENDIMIENTO)` agrupado por `INSTRUMENTO`. "
+        "Permite identificar profesionales con rendimientos atípicos."
+    )
+    fig_rend = chart_rendimiento_instrumento(df_centro)
+    fig_rend.update_layout(height=max(400, len(df_inst_c) * 40 + 100) if not df_inst_c.empty else 400)
+    st.plotly_chart(fig_rend, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 9: SOBRECUPO
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 9. Análisis de Cupos Sobrecupo")
+    v_sobre = kpis.get("sobrecupo", {}).get("valor", 0)
+    sem_sobre = semaforo(v_sobre, "sobrecupo")
+    st.markdown(
+        f"El indicador de **Sobrecupo** mide el porcentaje de atenciones que fueron "
+        f"agendadas por sobre la capacidad programada del profesional. Se calcula como: "
+        f"`Sobrecupos ÷ Total cupos × 100`. "
+        f"El centro **{centro_sel}** registra un **{v_sobre:.1f}%** de sobrecupo, "
+        f"clasificado como **{'aceptable (≤5%)' if sem_sobre == 'verde' else 'en observación (5-10%)' if sem_sobre == 'amarillo' else 'excesivo (>10%)'}**. "
+        f"Un sobrecupo elevado genera sobrecarga asistencial y puede afectar la calidad de atención."
+    )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 10: COBERTURA SECTORIAL
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 10. Cobertura Sectorial")
+    v_cob = kpis.get("cobertura_sectorial", {}).get("valor", 0)
+    sem_cob = semaforo(v_cob, "cobertura_sectorial")
+    st.markdown(
+        f"La **Cobertura Sectorial** mide el porcentaje de registros que tienen un sector "
+        f"territorial informado (Verde, Lila, Rojo) versus aquellos marcados como 'No Informado'. "
+        f"Se calcula como: `Registros con sector ÷ Total × 100`. "
+        f"El centro **{centro_sel}** tiene una cobertura de **{v_cob:.1f}%**, "
+        f"clasificada como **{'óptima (≥80%)' if sem_cob == 'verde' else 'parcial (60-80%)' if sem_cob == 'amarillo' else 'deficiente (<60%)'}**. "
+        f"Una baja cobertura dificulta el análisis territorial de la demanda."
+    )
+
+    st.markdown(
+        "**Gráfico 8.** Distribución de cupos por sector territorial. "
+        "Muestra la proporción de atenciones asignadas a cada sector (Verde, Lila, Rojo) "
+        "versus las que no tienen sector informado. Se calcula como el conteo de registros "
+        "agrupados por el campo `SECTOR`."
+    )
+    fig_sector = chart_sector(df_centro)
+    fig_sector.update_layout(height=450)
+    st.plotly_chart(fig_sector, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 11: AGENDAMIENTO REMOTO
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 11. Agendamiento Remoto")
+    v_ag = kpis.get("agendamiento_remoto", {}).get("valor", 0)
+    sem_ag = semaforo(v_ag, "agendamiento_remoto")
+    st.markdown(
+        f"El **Agendamiento Remoto** mide el porcentaje de citas gestionadas mediante "
+        f"canales no presenciales (telefónico y telesalud). Se calcula como: "
+        f"`(Telefónico + Telesalud) ÷ Total × 100`. "
+        f"El centro **{centro_sel}** registra un **{v_ag:.1f}%** de agendamiento remoto, "
+        f"clasificado como **{'adecuado (≥20%)' if sem_ag == 'verde' else 'incipiente (5-20%)' if sem_ag == 'amarillo' else 'insuficiente (<5%)'}**. "
+        f"Fomentar el agendamiento remoto reduce barreras de acceso y carga administrativa presencial."
+    )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 12: OCUPACIÓN HORARIO EXTENDIDO
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 12. Ocupación en Horario Extendido")
+    v_ext = kpis.get("ocupacion_extendida", {}).get("valor", 0)
+    sem_ext = semaforo(v_ext, "ocupacion_extendida")
+    st.markdown(
+        f"La **Ocupación en Horario Extendido** evalúa el uso de los cupos programados "
+        f"a partir de las 18:00 horas, correspondientes a la jornada extendida que implica "
+        f"un costo adicional para el establecimiento. Se calcula como: "
+        f"`Citados ≥18h ÷ (Citados + Disponibles ≥18h) × 100`. "
+        f"El centro **{centro_sel}** registra un **{v_ext:.1f}%** de ocupación extendida, "
+        f"clasificado como **{'adecuado (≥50%)' if sem_ext == 'verde' else 'bajo (30-50%)' if sem_ext == 'amarillo' else 'muy bajo (<30%)'}**. "
+        f"Una baja ocupación en este horario cuestiona la eficiencia del gasto asociado."
+    )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 13: TIPO DE ATENCIÓN
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 13. Distribución por Tipo de Atención")
+    st.markdown(
+        "**Gráfico 9.** Distribución de los registros según tipo de atención "
+        "(Morbilidad, Control, Urgencia, Procedimiento, etc.). "
+        "Muestra el volumen absoluto de cupos agrupados por `TIPO ATENCION`, "
+        "permitiendo identificar la composición de la cartera de servicios del centro."
+    )
+    fig_tipo = chart_tipo_atencion(df_centro, top_n=15)
+    fig_tipo.update_layout(height=500)
+    st.plotly_chart(fig_tipo, use_container_width=True)
+
+    # Tabla KPIs por tipo atención
+    df_kpis_ta = kpis_por_tipo_atencion(df_centro)
+    if not df_kpis_ta.empty:
+        st.markdown(
+            "**Tabla 1.** KPIs desglosados por tipo de atención. Cada fila muestra "
+            "el total de registros, citados, disponibles, bloqueados, atendidos y las "
+            "tasas de ocupación, no-show, bloqueo, efectividad, sobrecupo, agendamiento "
+            "remoto y rendimiento para cada tipo de atención del centro."
+        )
+        _sem_icon = lambda val, kpi: {"verde": "🟢", "amarillo": "🟡", "rojo": "🔴"}.get(semaforo(val, kpi), "⚪")
+        df_ta_disp = df_kpis_ta.copy()
+        df_ta_disp["Ocupación"] = df_ta_disp.apply(lambda r: f"{_sem_icon(r['ocupacion'],'ocupacion')} {r['ocupacion']:.1f}%", axis=1)
+        df_ta_disp["No-Show"] = df_ta_disp.apply(lambda r: f"{_sem_icon(r['no_show'],'no_show')} {r['no_show']:.1f}%", axis=1)
+        df_ta_disp["Efectividad"] = df_ta_disp.apply(lambda r: f"{_sem_icon(r['efectividad'],'efectividad')} {r['efectividad']:.1f}%", axis=1)
+        df_ta_disp["Rendim. (min)"] = df_ta_disp["rendimiento"].round(1)
+        df_ta_disp["Total"] = df_ta_disp["total"].apply(lambda v: f"{v:,}")
+        df_ta_disp["Citados"] = df_ta_disp["citados"].apply(lambda v: f"{v:,}")
+        df_ta_disp["Disponibles"] = df_ta_disp["disponibles"].apply(lambda v: f"{v:,}")
+        df_ta_disp["Bloqueados"] = df_ta_disp["bloqueados"].apply(lambda v: f"{v:,}")
+        df_ta_disp["Atendidos"] = df_ta_disp["atendidos"].apply(lambda v: f"{v:,}")
+        cols_show = ["tipo_atencion","Total","Citados","Disponibles","Bloqueados","Atendidos",
+                     "Ocupación","No-Show","Efectividad","Rendim. (min)"]
+        st.dataframe(
+            df_ta_disp[cols_show].rename(columns={"tipo_atencion": "Tipo de Atención"}),
+            width="stretch", hide_index=True,
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 14: ANÁLISIS POR INSTRUMENTO
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 14. KPIs por Instrumento / Profesional")
+    st.markdown(
+        "**Tabla 2.** Resumen de indicadores por instrumento (profesional) del centro. "
+        "Incluye el volumen total, citados, disponibles, bloqueados, atendidos y las "
+        "tasas de ocupación, no-show, efectividad y rendimiento. Permite identificar "
+        "profesionales con mayor o menor aprovechamiento de agenda."
+    )
+
+    if not df_inst_c.empty:
+        _sem_i = lambda val, kpi: {"verde": "🟢", "amarillo": "🟡", "rojo": "🔴"}.get(semaforo(val, kpi), "⚪")
+        df_id = df_inst_c.copy()
+        df_id["Ocupación"] = df_id.apply(lambda r: f"{_sem_i(r['ocupacion'],'ocupacion')} {r['ocupacion']:.1f}%", axis=1)
+        df_id["No-Show"] = df_id.apply(lambda r: f"{_sem_i(r['no_show'],'no_show')} {r['no_show']:.1f}%", axis=1)
+        df_id["Efectividad"] = df_id.apply(lambda r: f"{_sem_i(r['efectividad'],'efectividad')} {r['efectividad']:.1f}%", axis=1)
+        df_id["Rendim. (min)"] = df_id["rendimiento"].round(1)
+        df_id["Total"] = df_id["total"].apply(lambda v: f"{v:,}")
+        df_id["Citados"] = df_id["citados"].apply(lambda v: f"{v:,}")
+        df_id["Disponibles"] = df_id["disponibles"].apply(lambda v: f"{v:,}")
+        df_id["Bloqueados"] = df_id["bloqueados"].apply(lambda v: f"{v:,}")
+        df_id["Atendidos"] = df_id["atendidos"].apply(lambda v: f"{v:,}")
+        cols_i = ["instrumento","Total","Citados","Disponibles","Bloqueados","Atendidos",
+                  "Ocupación","No-Show","Efectividad","Rendim. (min)"]
+        st.dataframe(
+            df_id[cols_i].rename(columns={"instrumento": "Instrumento"}),
+            width="stretch", hide_index=True,
+        )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 15: EVOLUCIÓN MULTI-KPI
+    # ══════════════════════════════════════════════════════════════════════════
+    if "MES_NUM" in df_centro.columns and n_meses >= 2:
+        st.markdown("---")
+        st.markdown("## 15. Evolución Conjunta de KPIs Principales")
+        st.markdown(
+            "**Gráfico 10.** Evolución simultánea de Ocupación, No-Show y Bloqueo mes a mes. "
+            "Permite visualizar la interacción entre estos tres indicadores: un aumento de "
+            "bloqueo típicamente reduce la ocupación; un No-Show elevado reduce la efectividad. "
+            "Se calculan como las respectivas tasas mensuales del centro."
+        )
+        df_meses_c = _kpis_por_mes_centro(df_centro)
+        if not df_meses_c.empty:
+            fig_multi = chart_multi_kpi(df_meses_c)
+            fig_multi.update_layout(height=480)
+            st.plotly_chart(fig_multi, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 16: MAPA DE CALOR
+    # ══════════════════════════════════════════════════════════════════════════
+    if "MES_NUM" in df_centro.columns and "INSTRUMENTO" in df_centro.columns and n_meses >= 2:
+        st.markdown("---")
+        st.markdown("## 16. Mapa de Calor: Ocupación por Instrumento y Mes")
+        st.markdown(
+            "**Gráfico 11.** Mapa de calor que cruza cada instrumento (fila) con cada mes (columna), "
+            "coloreando según la tasa de ocupación. Los tonos verdes indican ocupación ≥ 65%, "
+            "amarillos zona intermedia, y rojos ocupación crítica. Se calcula como "
+            "`Citados ÷ (Citados + Disponibles) × 100` para cada combinación instrumento-mes. "
+            "Permite detectar patrones estacionales y profesionales con baja utilización sostenida."
+        )
+        from src.charts import chart_heatmap_instrumento_mes
+        fig_hm = chart_heatmap_instrumento_mes(df_centro)
+        n_inst_hm = df_centro["INSTRUMENTO"].nunique()
+        fig_hm.update_layout(height=max(450, n_inst_hm * 38 + 120))
+        st.plotly_chart(fig_hm, use_container_width=True)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 17: ALERTAS DEL CENTRO
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 17. Alertas y Brechas del Centro")
+    alertas_centro = detectar_alertas(df_centro)
+    if not alertas_centro:
+        st.success(
+            f"✅ **{centro_sel}** no presenta brechas críticas. "
+            "Todos los indicadores se encuentran dentro de los umbrales aceptables.",
+            icon="✅"
+        )
+    else:
+        st.error(
+            f"Se detectaron **{len(alertas_centro)}** brecha(s) en **{centro_sel}** "
+            "que requieren atención prioritaria.", icon="⚠️"
+        )
+        for a in alertas_centro:
+            sem_a = a.get("semaforo", "gris")
+            icon_a = "🔴" if sem_a == "rojo" else "🟡"
+            st.markdown(
+                f"- {icon_a} **{a['tipo']}**: {a['valor']:.1f} {a['unidad']} — {a['descripcion']}"
+            )
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # SECCIÓN 18: CONCLUSIÓN
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("## 18. Conclusión del Informe")
+
+    n_verde = sum(1 for k in kpis.values() if isinstance(k, dict) and k.get("semaforo") == "verde")
+    n_amarillo = sum(1 for k in kpis.values() if isinstance(k, dict) and k.get("semaforo") == "amarillo")
+    n_rojo = sum(1 for k in kpis.values() if isinstance(k, dict) and k.get("semaforo") == "rojo")
+
+    st.markdown(
+        f"El centro **{centro_sel}** presenta **{n_verde}** indicadores en estado óptimo (🟢), "
+        f"**{n_amarillo}** en zona de observación (🟡) y **{n_rojo}** en brecha crítica (🔴) "
+        f"durante el período analizado ({rango_meses}). "
+    )
+    if n_rojo > 0:
+        kpis_rojos = [
+            k.get("nombre", key) for key, k in kpis.items()
+            if isinstance(k, dict) and k.get("semaforo") == "rojo"
+        ]
+        st.markdown(
+            f"Los indicadores en estado crítico que requieren intervención inmediata son: "
+            f"**{', '.join(kpis_rojos)}**. Se recomienda priorizar acciones correctivas en estas áreas."
+        )
+    if n_amarillo > 0:
+        kpis_amarillos = [
+            k.get("nombre", key) for key, k in kpis.items()
+            if isinstance(k, dict) and k.get("semaforo") == "amarillo"
+        ]
+        st.markdown(
+            f"Los indicadores en observación son: **{', '.join(kpis_amarillos)}**. "
+            f"Se sugiere monitoreo continuo para evitar que evolucionen a brecha crítica."
+        )
+    if n_rojo == 0 and n_amarillo == 0:
+        st.markdown(
+            "Todos los indicadores se encuentran dentro de los umbrales establecidos. "
+            "Se recomienda mantener las estrategias actuales y continuar con el monitoreo periódico."
+        )
+
+    st.caption(
+        f"*Informe generado automáticamente por el Sistema de Análisis de Productividad APS — "
+        f"Servicio de Salud Metropolitano Central · {centro_sel} · Período: {rango_meses}*"
+    )
+
+
+def _kpis_por_mes_centro(df_centro: pd.DataFrame) -> pd.DataFrame:
+    """Calcula KPIs por mes para un centro específico (sin caché, dato ya filtrado)."""
+    from src.kpis import (
+        calc_ocupacion, calc_no_show, calc_bloqueo, calc_efectividad,
+        calc_rendimiento, calc_agendamiento_remoto, calc_sobrecupo,
+        calc_cobertura_sectorial,
+    )
+    if "MES_NUM" not in df_centro.columns or df_centro.empty:
+        return pd.DataFrame()
+
+    MESES_ES = {1:"Ene",2:"Feb",3:"Mar",4:"Abr",5:"May",6:"Jun",
+                7:"Jul",8:"Ago",9:"Sep",10:"Oct",11:"Nov",12:"Dic"}
+    rows = []
+    for mes, grp in df_centro.groupby("MES_NUM", observed=True):
+        rows.append({
+            "mes": mes,
+            "mes_nombre": MESES_ES.get(int(mes), str(mes)),
+            "ocupacion": calc_ocupacion(grp),
+            "no_show": calc_no_show(grp),
+            "bloqueo": calc_bloqueo(grp),
+            "efectividad": calc_efectividad(grp),
+            "rendimiento": calc_rendimiento(grp),
+            "agendamiento_remoto": calc_agendamiento_remoto(grp),
+            "sobrecupo": calc_sobrecupo(grp),
+            "cobertura_sectorial": calc_cobertura_sectorial(grp),
+            "total_registros": len(grp),
+            "citados": (grp["ESTADO CUPO"] == "CITADO").sum(),
+            "disponibles": (grp["ESTADO CUPO"] == "DISPONIBLE").sum(),
+            "bloqueados": (grp["ESTADO CUPO"] == "BLOQUEADO").sum(),
+        })
+    return pd.DataFrame(rows).sort_values("mes")
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1840,6 +2473,13 @@ def main():
             st.warning("Primero carga datos desde **Inicio y Carga**.")
         else:
             page_alertas(dff)
+    elif nav == "📋 Informe por Centro":
+        if _bq_sin_cargar:
+            st.info("🗄️ Usa el botón **📥 Cargar datos filtrados** en el panel lateral para analizar los datos de BigQuery.", icon="ℹ️")
+        elif not has_df():
+            st.warning("Primero carga datos desde **Inicio y Carga**.")
+        else:
+            page_informe_centro(dff)
 
     # Footer + estado almacenamiento
     st.sidebar.markdown("---")

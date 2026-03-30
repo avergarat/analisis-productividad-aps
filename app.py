@@ -67,6 +67,7 @@ from src.charts import (
 )
 from src.demo_data import generate_demo_data, get_demo_metadata
 from src.storage import save_data, load_data, delete_data, github_configured, storage_status
+from src import bigquery_client as bq
 import gc
 
 # CSS personalizado
@@ -119,15 +120,17 @@ st.markdown("""
 # Gestión delegada a src/storage.py
 # ─────────────────────────────────────────────────────────────
 def _save_session():
-    """Guarda df en GitHub + /tmp. Solo para datos reales (no demo)."""
+    """Guarda df en GitHub + /tmp (fallback). Solo para datos reales (no demo)."""
     if st.session_state.get("df") is None or st.session_state.get("demo_loaded", False):
         return
-    ok, msg = save_data(
-        st.session_state.df,
-        registro_cargas=st.session_state.get("registro_cargas", [])
-    )
-    if not ok and "GitHub no configurado" not in msg:
-        st.toast(msg, icon="⚠️")
+    # Guardar en /tmp + GitHub solo si BQ no está configurado (BQ es el almacén primario)
+    if not bq.bq_configured():
+        ok, msg = save_data(
+            st.session_state.df,
+            registro_cargas=st.session_state.get("registro_cargas", [])
+        )
+        if not ok and "GitHub no configurado" not in msg:
+            st.toast(msg, icon="⚠️")
 
 
 def _load_session() -> bool:
@@ -152,6 +155,9 @@ def init_session():
         "archivos_cargados": [],
         "demo_loaded": False,
         "registro_cargas": [],
+        # BigQuery: opciones de filtro cacheadas + total de registros
+        "bq_filter_options": {},
+        "bq_total_registros": 0,
     }
     for k, v in defaults.items():
         if k not in st.session_state:
@@ -160,35 +166,57 @@ def init_session():
 
 init_session()
 
-# Auto-cargar datos desde /tmp o GitHub si la sesión está vacía
+# Auto-cargar al inicio de sesión
 if st.session_state.df is None and not st.session_state.demo_loaded:
-    try:
-        if _load_session():
-            n_rec = len(st.session_state.df)
-            if n_rec > 800_000:
-                # Dataset demasiado grande — no cargar automáticamente para evitar OOM
-                st.session_state.df = None
-                st.toast(
-                    "⚠️ Datos guardados muy grandes para cargar automáticamente. "
-                    "Sube los archivos manualmente.",
-                    icon="⚠️"
-                )
-            else:
-                st.toast(
-                    f"💾 Datos recuperados · {n_rec:,} registros",
-                    icon="✅"
-                )
-    except MemoryError:
-        st.session_state.df = None
-        st.toast("⚠️ Memoria insuficiente para recuperar datos guardados. Sube los archivos manualmente.", icon="⚠️")
-    except Exception:
-        st.session_state.df = None
+    if bq.bq_configured():
+        # Con BigQuery: cargar solo metadatos/opciones de filtro (NO los datos crudos)
+        # Los datos se cargan solo cuando el usuario aplica filtros
+        if not st.session_state.bq_filter_options:
+            try:
+                opts = bq.get_filter_options()
+                if opts:
+                    st.session_state.bq_filter_options = opts
+                    st.session_state.bq_total_registros = bq.get_record_count()
+                    st.toast(
+                        f"🗄️ BigQuery conectado · {st.session_state.bq_total_registros:,} registros disponibles",
+                        icon="✅"
+                    )
+            except Exception:
+                pass
+    else:
+        # Sin BigQuery: fallback a /tmp + GitHub (comportamiento anterior)
+        try:
+            if _load_session():
+                n_rec = len(st.session_state.df)
+                if n_rec > 800_000:
+                    st.session_state.df = None
+                    st.toast(
+                        "⚠️ Datos guardados muy grandes para cargar automáticamente. "
+                        "Sube los archivos manualmente.",
+                        icon="⚠️"
+                    )
+                else:
+                    st.toast(f"💾 Datos recuperados · {n_rec:,} registros", icon="✅")
+        except MemoryError:
+            st.session_state.df = None
+            st.toast("⚠️ Memoria insuficiente para recuperar datos guardados.", icon="⚠️")
+        except Exception:
+            st.session_state.df = None
 
 
 # ─────────────────────────────────────────────────────────────
 # HELPERS
 # ─────────────────────────────────────────────────────────────
 def has_data() -> bool:
+    if st.session_state.df is not None and not st.session_state.df.empty:
+        return True
+    if bq.bq_configured() and st.session_state.get("bq_total_registros", 0) > 0:
+        return True
+    return False
+
+
+def has_df() -> bool:
+    """True solo si hay datos cargados en memoria (session_state.df)."""
     return st.session_state.df is not None and not st.session_state.df.empty
 
 
@@ -240,49 +268,89 @@ def render_sidebar() -> dict:
         st.divider()
 
         filtros = {}
-        if has_data():
+        MESES_N = {1:"Ene",2:"Feb",3:"Mar",4:"Abr",5:"May",6:"Jun",
+                   7:"Jul",8:"Ago",9:"Sep",10:"Oct",11:"Nov",12:"Dic"}
+
+        # ── Determinar fuente de opciones de filtro ──────────────────────────
+        # Prioridad: datos en memoria → opciones BQ cacheadas → vacío
+        if has_df():
             df = st.session_state.df
+            opts_centros    = sorted(df["ESTABLECIMIENTO"].dropna().unique().tolist())
+            opts_meses      = sorted(df["MES_NUM"].dropna().unique().tolist())
+            opts_inst       = sorted(df["INSTRUMENTO"].dropna().unique().tolist())
+            opts_sectores   = sorted(df["SECTOR"].dropna().unique().tolist())
+            opts_tc         = sorted(df["TIPO CUPO"].dropna().unique().tolist())
+        elif bq.bq_configured() and st.session_state.bq_filter_options:
+            opts_bq = st.session_state.bq_filter_options
+            opts_centros    = opts_bq.get("establecimientos", [])
+            opts_meses      = opts_bq.get("meses", [])
+            opts_inst       = opts_bq.get("instrumentos", [])
+            opts_sectores   = opts_bq.get("sectores", [])
+            opts_tc         = opts_bq.get("tipos_cupo", [])
+        else:
+            opts_centros = opts_meses = opts_inst = opts_sectores = opts_tc = []
+
+        if opts_centros:
             st.markdown("**Filtros**")
 
-            # Centros
-            centros_disp = sorted(df["ESTABLECIMIENTO"].dropna().unique().tolist())
-            centros_sel = st.multiselect("Centro de Salud", centros_disp,
-                                          default=centros_disp, key="filt_centros")
-            filtros["centros"] = centros_sel if centros_sel else centros_disp
+            centros_sel = st.multiselect("Centro de Salud", opts_centros,
+                                          default=opts_centros, key="filt_centros")
+            filtros["centros"] = centros_sel if centros_sel else opts_centros
 
-            # Meses
-            meses_disp = sorted(df["MES_NUM"].dropna().unique().tolist())
-            MESES_N = {1:"Ene",2:"Feb",3:"Mar",4:"Abr",5:"May",6:"Jun",
-                       7:"Jul",8:"Ago",9:"Sep",10:"Oct",11:"Nov",12:"Dic"}
-            meses_labels = {m: f"{MESES_N.get(int(m), str(m))} ({int(m)})" for m in meses_disp}
+            meses_labels = {m: f"{MESES_N.get(int(m), str(m))} ({int(m)})" for m in opts_meses}
             meses_sel_labels = st.multiselect(
                 "Meses", options=list(meses_labels.values()),
                 default=list(meses_labels.values()), key="filt_meses"
             )
             meses_sel = [m for m, lbl in meses_labels.items() if lbl in meses_sel_labels]
-            filtros["meses"] = meses_sel if meses_sel else meses_disp
+            filtros["meses"] = meses_sel if meses_sel else opts_meses
 
-            # Instrumento
-            inst_disp = sorted(df["INSTRUMENTO"].dropna().unique().tolist())
-            inst_sel = st.multiselect("Instrumento/Profesional", inst_disp,
-                                       default=inst_disp, key="filt_inst")
-            filtros["instrumentos"] = inst_sel if inst_sel else inst_disp
+            inst_sel = st.multiselect("Instrumento/Profesional", opts_inst,
+                                       default=opts_inst, key="filt_inst")
+            filtros["instrumentos"] = inst_sel if inst_sel else opts_inst
 
-            # Sector
-            sect_disp = sorted(df["SECTOR"].dropna().unique().tolist())
-            sect_sel = st.multiselect("Sector Territorial", sect_disp,
-                                       default=sect_disp, key="filt_sect")
-            filtros["sectores"] = sect_sel if sect_sel else sect_disp
+            sect_sel = st.multiselect("Sector Territorial", opts_sectores,
+                                       default=opts_sectores, key="filt_sect")
+            filtros["sectores"] = sect_sel if sect_sel else opts_sectores
 
-            # Tipo cupo
-            tc_disp = sorted(df["TIPO CUPO"].dropna().unique().tolist())
-            tc_sel = st.multiselect("Tipo Cupo", tc_disp,
-                                     default=tc_disp, key="filt_tc")
-            filtros["tipo_cupo"] = tc_sel if tc_sel else tc_disp
+            tc_sel = st.multiselect("Tipo Cupo", opts_tc,
+                                     default=opts_tc, key="filt_tc")
+            filtros["tipo_cupo"] = tc_sel if tc_sel else opts_tc
 
             st.divider()
-            dff = apply_filters(df, filtros)
-            st.caption(f"📋 **{len(dff):,}** registros seleccionados")
+
+            # ── Botón "Cargar desde BigQuery" (solo si BQ configurado) ───────
+            if bq.bq_configured() and not has_df():
+                n_total = st.session_state.get("bq_total_registros", 0)
+                st.caption(f"🗄️ **{n_total:,}** registros en BigQuery")
+                if st.button("📥 Cargar datos filtrados", type="primary",
+                             use_container_width=True, key="btn_bq_load"):
+                    with st.spinner("Consultando BigQuery..."):
+                        df_bq, msg_bq = bq.load_filtered(
+                            centros=filtros.get("centros"),
+                            meses=filtros.get("meses"),
+                            instrumentos=filtros.get("instrumentos"),
+                            sectores=filtros.get("sectores"),
+                            tipos_cupo=filtros.get("tipo_cupo"),
+                        )
+                    if df_bq is not None:
+                        st.session_state.df = df_bq
+                        st.session_state.demo_loaded = False
+                        st.toast(msg_bq, icon="✅")
+                        st.rerun()
+                    else:
+                        st.warning(msg_bq)
+            elif has_df():
+                dff_count = apply_filters(st.session_state.df, filtros)
+                st.caption(f"📋 **{len(dff_count):,}** registros seleccionados")
+                if bq.bq_configured():
+                    n_total = st.session_state.get("bq_total_registros", 0)
+                    st.caption(f"🗄️ Total en BQ: **{n_total:,}**")
+                    if st.button("🔄 Recargar desde BigQuery", use_container_width=True,
+                                 key="btn_bq_reload"):
+                        st.session_state.df = None
+                        st.rerun()
+
             if st.session_state.demo_loaded:
                 st.info("📊 Modo Demo activo", icon="ℹ️")
 
@@ -367,15 +435,29 @@ def page_inicio():
                     if dfs:
                         n_archivos = len(dfs)
                         df_nuevos = consolidate_files(dfs)
-                        del dfs  # liberar lista de DataFrames intermedios
+                        del dfs
                         gc.collect()
                         n_nuevos = len(df_nuevos)
-                        # Carga incremental: acumular sobre datos existentes
+
+                        # ── Guardar en BigQuery (almacén primario) ───────────
+                        if bq.bq_configured():
+                            with st.spinner("Guardando en BigQuery..."):
+                                ok_bq, msg_bq = bq.insert_data(df_nuevos)
+                            if ok_bq:
+                                # Actualizar metadatos BQ en sesión
+                                st.session_state.bq_filter_options = bq.get_filter_options()
+                                st.session_state.bq_total_registros = bq.get_record_count()
+                                st.info(msg_bq, icon="🗄️")
+                            else:
+                                st.warning(f"BigQuery: {msg_bq}", icon="⚠️")
+
+                        # ── Mantener en sesión para análisis inmediato ───────
                         if st.session_state.df is not None and not st.session_state.df.empty and not st.session_state.demo_loaded:
                             df_final = consolidate_files([st.session_state.df, df_nuevos])
                             del df_nuevos
                         else:
                             df_final = df_nuevos
+                        gc.collect()
                         st.session_state.df = df_final
                         st.session_state.metadata_list += meta_list
                         st.session_state.archivos_cargados += [f.name for f in uploaded_files]
@@ -390,19 +472,19 @@ def page_inicio():
                                 "Registros nuevos": n_nuevos,
                                 "Cargado el": _dt.now().strftime("%d/%m/%Y %H:%M"),
                             })
-                        _save_session()
-                        st.success(f"✅ {n_archivos} archivo(s) procesados · **{n_nuevos:,}** nuevos registros · **{len(df_final):,}** registros acumulados en total")
-                        if len(df_final) > 800_000:
-                            st.warning(
-                                f"⚠️ Dataset muy grande ({len(df_final):,} filas). "
-                                "Para evitar errores de memoria, use el botón **🗑️ Limpiar datos** "
-                                "y recargue solo los archivos necesarios.",
-                                icon="⚠️"
-                            )
-                        if github_configured():
-                            st.info("💾 Datos guardados en GitHub — cualquier usuario verá estos datos al abrir la app.", icon="✅")
-                        else:
-                            st.warning("⚠️ GitHub no configurado: datos solo en caché local (se pierden al reiniciar el servidor). Configura `[github_storage]` en Secrets para persistencia real.", icon="⚠️")
+                        _save_session()  # fallback /tmp+GitHub si BQ no configurado
+                        st.success(f"✅ {n_archivos} archivo(s) procesados · **{n_nuevos:,}** nuevos registros · **{len(df_final):,}** en sesión actual")
+                        if not bq.bq_configured():
+                            if len(df_final) > 800_000:
+                                st.warning(
+                                    f"⚠️ Dataset muy grande ({len(df_final):,} filas). "
+                                    "Configura BigQuery en Secrets para manejar millones de registros.",
+                                    icon="⚠️"
+                                )
+                            if github_configured():
+                                st.info("💾 Datos guardados en GitHub (sin BigQuery configurado).", icon="✅")
+                            else:
+                                st.warning("⚠️ Sin BigQuery ni GitHub: datos solo en caché local.", icon="⚠️")
 
                     for err in errores_globales:
                         st.warning(err)
@@ -483,53 +565,113 @@ def page_inicio():
     # ── Resumen de datos cargados ──
     if has_data():
         st.divider()
-        df = st.session_state.df
         st.markdown("#### Resumen de datos cargados")
 
-        cols = st.columns(5)
-        metrics = [
-            ("Total registros", f"{len(df):,}", "📋"),
-            ("CESFAM", f"{df['ESTABLECIMIENTO'].nunique()}", "🏥"),
-            ("Instrumentos", f"{df['INSTRUMENTO'].nunique()}", "👤"),
-            ("Meses", f"{df['MES_NUM'].nunique()}", "📅"),
-            ("Tipos atención", f"{df['TIPO ATENCION'].nunique()}", "📌"),
-        ]
-        for col, (label, val, icon) in zip(cols, metrics):
-            col.metric(f"{icon} {label}", val)
-
-        # Estado de cupos global
-        st.markdown("##### Composición de cupos")
-        col1, col2 = st.columns([2, 1])
-        with col1:
-            fig_est = chart_estado_cupos(df)
-            st.plotly_chart(fig_est)
-        with col2:
-            st.markdown("**Archivos procesados:**")
-            archivos = df["_archivo"].unique()
-            for a in archivos:
-                n = (df["_archivo"] == a).sum()
-                st.write(f"• {a[:40]} ({n:,} reg.)")
-            st.divider()
-            csv_bytes = df.to_csv(index=False).encode("utf-8")
-            st.download_button(
-                "💾 Descargar datos consolidados (.csv)",
-                data=csv_bytes,
-                file_name="datos_consolidados_aps.csv",
-                mime="text/csv",
-                use_container_width=True,
-                help="Guarda los datos acumulados. Re-súbelo en la próxima sesión usando la pestaña 'Cargar datos guardados' para continuar sin recargar los archivos IRIS.",
+        # ── Métricas de resumen ─────────────────────────────────────────────
+        if bq.bq_configured() and st.session_state.get("bq_total_registros", 0) > 0 and not has_df():
+            # Solo tenemos metadatos BQ — mostrar resumen desde filter_options
+            opts = st.session_state.bq_filter_options
+            n_total = st.session_state.bq_total_registros
+            cols = st.columns(5)
+            cols[0].metric("📋 Total registros", f"{n_total:,}")
+            cols[1].metric("🏥 CESFAM", str(len(opts.get("establecimientos", []))))
+            cols[2].metric("👤 Instrumentos", str(len(opts.get("instrumentos", []))))
+            cols[3].metric("📅 Meses", str(len(opts.get("meses", []))))
+            cols[4].metric("📌 Tipos atención", str(len(opts.get("tipos_atencion", []))))
+            st.info(
+                "Los datos están almacenados en BigQuery. "
+                "Usa el botón **📥 Cargar datos filtrados** en el panel lateral para analizar un subconjunto.",
+                icon="🗄️"
             )
-            if st.button("🗑️ Limpiar todos los datos", type="secondary", use_container_width=True):
-                st.session_state.df = None
-                st.session_state.metadata_list = []
-                st.session_state.archivos_cargados = []
-                st.session_state.demo_loaded = False
-                st.session_state.registro_cargas = []
-                # Borrar de /tmp y GitHub
-                delete_data()
-                # Limpiar caché de KPIs
-                st.cache_data.clear()
-                st.rerun()
+            # ── Archivos cargados en BQ ─────────────────────────────────────
+            archivos_bq = bq.get_archivos_cargados()
+            if archivos_bq:
+                st.markdown("##### 📂 Archivos en BigQuery")
+                df_arch = pd.DataFrame(archivos_bq)
+                if "ultima_carga" in df_arch.columns:
+                    df_arch["ultima_carga"] = pd.to_datetime(df_arch["ultima_carga"]).dt.strftime("%d/%m/%Y %H:%M")
+                st.dataframe(df_arch, use_container_width=True, hide_index=True)
+            # ── Descarga completa desde BQ ──────────────────────────────────
+            st.markdown("##### 💾 Descargar datos consolidados")
+            st.caption("Descarga todos los datos almacenados en BigQuery como CSV.")
+            if st.button("⬇️ Preparar descarga completa desde BigQuery", use_container_width=True):
+                with st.spinner("Exportando desde BigQuery... (puede tomar unos segundos)"):
+                    csv_bq = bq.export_csv_bytes()
+                if csv_bq:
+                    st.download_button(
+                        "💾 Descargar datos_consolidados_aps.csv",
+                        data=csv_bq,
+                        file_name="datos_consolidados_aps.csv",
+                        mime="text/csv",
+                        use_container_width=True,
+                    )
+                else:
+                    st.error("No se pudo exportar desde BigQuery.")
+
+            if st.button("🗑️ Limpiar TODOS los datos de BigQuery", type="secondary", use_container_width=True):
+                ok_del, msg_del = bq.delete_all_data()
+                if ok_del:
+                    st.session_state.df = None
+                    st.session_state.metadata_list = []
+                    st.session_state.archivos_cargados = []
+                    st.session_state.demo_loaded = False
+                    st.session_state.registro_cargas = []
+                    st.session_state.bq_filter_options = {}
+                    st.session_state.bq_total_registros = 0
+                    delete_data()
+                    st.cache_data.clear()
+                    st.rerun()
+                else:
+                    st.error(msg_del)
+
+        elif has_df():
+            df = st.session_state.df
+            cols = st.columns(5)
+            metrics = [
+                ("Total registros", f"{len(df):,}", "📋"),
+                ("CESFAM", f"{df['ESTABLECIMIENTO'].nunique()}", "🏥"),
+                ("Instrumentos", f"{df['INSTRUMENTO'].nunique()}", "👤"),
+                ("Meses", f"{df['MES_NUM'].nunique()}", "📅"),
+                ("Tipos atención", f"{df['TIPO ATENCION'].nunique()}", "📌"),
+            ]
+            for col, (label, val, icon) in zip(cols, metrics):
+                col.metric(f"{icon} {label}", val)
+
+            st.markdown("##### Composición de cupos")
+            col1, col2 = st.columns([2, 1])
+            with col1:
+                fig_est = chart_estado_cupos(df)
+                st.plotly_chart(fig_est)
+            with col2:
+                st.markdown("**Archivos en sesión:**")
+                archivos = df["_archivo"].unique()
+                for a in archivos:
+                    n = (df["_archivo"] == a).sum()
+                    st.write(f"• {a[:40]} ({n:,} reg.)")
+                st.divider()
+                # Descarga desde sesión
+                csv_bytes = df.to_csv(index=False).encode("utf-8")
+                st.download_button(
+                    "💾 Descargar datos consolidados (.csv)",
+                    data=csv_bytes,
+                    file_name="datos_consolidados_aps.csv",
+                    mime="text/csv",
+                    use_container_width=True,
+                    help="Descarga los datos actualmente cargados en sesión.",
+                )
+                if st.button("🗑️ Limpiar todos los datos", type="secondary", use_container_width=True):
+                    st.session_state.df = None
+                    st.session_state.metadata_list = []
+                    st.session_state.archivos_cargados = []
+                    st.session_state.demo_loaded = False
+                    st.session_state.registro_cargas = []
+                    if bq.bq_configured():
+                        bq.delete_all_data()
+                        st.session_state.bq_filter_options = {}
+                        st.session_state.bq_total_registros = 0
+                    delete_data()
+                    st.cache_data.clear()
+                    st.rerun()
 
         if st.session_state.registro_cargas:
             st.markdown("##### 📋 Registro de cargas (sesión actual)")
@@ -1646,43 +1788,66 @@ def page_alertas(dff: pd.DataFrame):
 def main():
     nav, filtros = render_sidebar()
 
-    if has_data():
+    if has_df():
         dff = apply_filters(st.session_state.df, filtros)
     else:
         dff = pd.DataFrame()
 
+    # Mensaje guía cuando BQ tiene datos pero aún no se ha cargado el subconjunto
+    _bq_sin_cargar = (
+        bq.bq_configured()
+        and st.session_state.get("bq_total_registros", 0) > 0
+        and not has_df()
+        and not st.session_state.demo_loaded
+    )
+
     if nav == "🏠 Inicio y Carga":
         page_inicio()
     elif nav == "📊 Dashboard KPIs":
-        if not has_data():
+        if _bq_sin_cargar:
+            st.info("🗄️ Usa el botón **📥 Cargar datos filtrados** en el panel lateral para analizar los datos de BigQuery.", icon="ℹ️")
+        elif not has_df():
             st.warning("Primero carga datos desde **Inicio y Carga**.")
         else:
             page_dashboard(dff)
     elif nav == "📈 Evolución Temporal":
-        if not has_data():
+        if _bq_sin_cargar:
+            st.info("🗄️ Usa el botón **📥 Cargar datos filtrados** en el panel lateral para analizar los datos de BigQuery.", icon="ℹ️")
+        elif not has_df():
             st.warning("Primero carga datos desde **Inicio y Carga**.")
         else:
             page_evolucion(dff)
     elif nav == "🔍 Análisis Detallado":
-        if not has_data():
+        if _bq_sin_cargar:
+            st.info("🗄️ Usa el botón **📥 Cargar datos filtrados** en el panel lateral para analizar los datos de BigQuery.", icon="ℹ️")
+        elif not has_df():
             st.warning("Primero carga datos desde **Inicio y Carga**.")
         else:
             page_analisis(dff)
     elif nav == "⚠️ Alertas y Brechas":
-        if not has_data():
+        if _bq_sin_cargar:
+            st.info("🗄️ Usa el botón **📥 Cargar datos filtrados** en el panel lateral para analizar los datos de BigQuery.", icon="ℹ️")
+        elif not has_df():
             st.warning("Primero carga datos desde **Inicio y Carga**.")
         else:
             page_alertas(dff)
 
     # Footer + estado almacenamiento
     st.sidebar.markdown("---")
-    status = storage_status()
-    if status["github_configurado"]:
-        st.sidebar.caption(f"💾 GitHub: `{status['repo']}`")
+    bq_st = bq.bq_status()
+    if bq_st["configurado"]:
+        n_bq = st.session_state.get("bq_total_registros", 0)
+        st.sidebar.caption(f"🗄️ BigQuery: `{bq_st['dataset']}.{bq_st['table']}`")
+        if n_bq:
+            st.sidebar.caption(f"📊 {n_bq:,} registros almacenados")
     else:
-        st.sidebar.caption("⚠️ GitHub no configurado — persistencia solo en sesión activa")
+        status = storage_status()
+        if status["github_configurado"]:
+            st.sidebar.caption(f"💾 GitHub: `{status['repo']}`")
+        else:
+            st.sidebar.caption("⚠️ Sin BigQuery ni GitHub — solo sesión activa")
     st.sidebar.caption(
-        "Sistema de Análisis de Productividad APS · v1.1  \n"
+        "Sistema de Análisis de Productividad APS · v1.2  \n"
         "SSMC · Modelo de Análisis de Productividad · 2026"
     )
 

@@ -341,7 +341,7 @@ def page_inicio():
             )
 
             if uploaded_files:
-                if st.button("⚙️ Procesar archivos", type="primary", width="stretch"):
+                if st.button("⚙️ Procesar archivos", type="primary", use_container_width=True):
                     dfs = []
                     meta_list = []
                     errores_globales = []
@@ -416,7 +416,7 @@ def page_inicio():
                 key="restore_csv",
             )
             if uploaded_csv:
-                if st.button("📥 Restaurar datos guardados", type="primary", width="stretch"):
+                if st.button("📥 Restaurar datos guardados", type="primary", use_container_width=True):
                     with st.spinner("Restaurando datos..."):
                         df_rest = pd.read_csv(uploaded_csv)
                         # Restaurar tipos de columnas
@@ -448,7 +448,7 @@ def page_inicio():
             reales del CESFAM N°5 (2025) para explorar todas las funcionalidades.
             """)
             n_demo = st.slider("Número de registros demo", 20_000, 150_000, 80_000, 10_000)
-            if st.button("🎲 Cargar datos demo", type="secondary", width="stretch"):
+            if st.button("🎲 Cargar datos demo", type="secondary", use_container_width=True):
                 with st.spinner("Generando datos demo..."):
                     df_demo = generate_demo_data(n_records=n_demo)
                     st.session_state.df = df_demo
@@ -516,10 +516,10 @@ def page_inicio():
                 data=csv_bytes,
                 file_name="datos_consolidados_aps.csv",
                 mime="text/csv",
-                width="stretch",
+                use_container_width=True,
                 help="Guarda los datos acumulados. Re-súbelo en la próxima sesión usando la pestaña 'Cargar datos guardados' para continuar sin recargar los archivos IRIS.",
             )
-            if st.button("🗑️ Limpiar todos los datos", type="secondary", width="stretch"):
+            if st.button("🗑️ Limpiar todos los datos", type="secondary", use_container_width=True):
                 st.session_state.df = None
                 st.session_state.metadata_list = []
                 st.session_state.archivos_cargados = []
@@ -535,7 +535,7 @@ def page_inicio():
             st.markdown("##### 📋 Registro de cargas (sesión actual)")
             st.caption("Historial incremental de archivos procesados. La columna **'Fecha hasta'** indica el último período cargado por archivo; úsala para saber desde qué fecha debes generar el próximo reporte IRIS.")
             df_reg = pd.DataFrame(st.session_state.registro_cargas)
-            st.dataframe(df_reg, width="stretch", hide_index=True)
+            st.dataframe(df_reg, use_container_width=True, hide_index=True)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -610,7 +610,7 @@ def page_dashboard(dff: pd.DataFrame):
                   .style
                   .apply(highlight_row, axis=1)
                   .hide(axis="index"))
-        st.dataframe(styled, width="stretch", hide_index=True,
+        st.dataframe(styled, use_container_width=True, hide_index=True,
                      column_config={"_semaforo": None})
 
     with col_sector:
@@ -759,7 +759,7 @@ def page_analisis(dff: pd.DataFrame):
             col1, col2 = st.columns(2)
             with col1:
                 fig_rend = chart_rendimiento_instrumento(dff_inst)
-                st.plotly_chart(fig_rend, width="stretch")
+                st.plotly_chart(fig_rend, use_container_width=True)
             with col2:
                 df_inst_kpi = kpis_por_instrumento(dff_inst)
                 if not df_inst_kpi.empty:
@@ -783,7 +783,7 @@ def page_analisis(dff: pd.DataFrame):
                         margin=dict(l=10, r=60, t=50, b=40),
                         xaxis=dict(range=[0, 110], title="Ocupación (%)"),
                     )
-                    st.plotly_chart(fig_ocu, width="stretch")
+                    st.plotly_chart(fig_ocu, use_container_width=True)
 
             # ── Sección 2: Tabla completa de KPIs con semáforos ───────
             st.markdown("##### KPIs por Instrumento")
@@ -803,7 +803,7 @@ def page_analisis(dff: pd.DataFrame):
                 df_disp["Citados"]        = df_disp["citados"].apply(lambda v: f"{v:,}")
                 st.dataframe(
                     df_disp[["instrumento","Total","Citados","Ocupación","No-Show","Efectividad","Rendim. (min)"]].rename(columns={"instrumento":"Instrumento"}),
-                    width="stretch", hide_index=True
+                    use_container_width=True, hide_index=True
                 )
 
             # ── Sección 3: Series temporales ──────────────────────────
@@ -832,7 +832,7 @@ def page_analisis(dff: pd.DataFrame):
                         fig_ocu_ts.add_hline(y=65, line_dash="dash", line_color="#27AE60",
                                              annotation_text="Meta 65%", annotation_position="bottom right")
                         fig_ocu_ts.update_layout(margin=dict(l=20,r=20,t=50,b=40), legend=dict(font_size=10))
-                        st.plotly_chart(fig_ocu_ts, width="stretch")
+                        st.plotly_chart(fig_ocu_ts, use_container_width=True)
 
                     with ts_c2:
                         fig_ns_ts = px.line(
@@ -845,7 +845,7 @@ def page_analisis(dff: pd.DataFrame):
                         fig_ns_ts.add_hline(y=10, line_dash="dash", line_color="#E74C3C",
                                             annotation_text="Umbral 10%", annotation_position="top right")
                         fig_ns_ts.update_layout(margin=dict(l=20,r=20,t=50,b=40), legend=dict(font_size=10))
-                        st.plotly_chart(fig_ns_ts, width="stretch")
+                        st.plotly_chart(fig_ns_ts, use_container_width=True)
 
                     ts_c3, ts_c4 = st.columns(2)
 
@@ -860,7 +860,7 @@ def page_analisis(dff: pd.DataFrame):
                         fig_ef_ts.add_hline(y=88, line_dash="dash", line_color="#27AE60",
                                             annotation_text="Meta 88%", annotation_position="bottom right")
                         fig_ef_ts.update_layout(margin=dict(l=20,r=20,t=50,b=40), legend=dict(font_size=10))
-                        st.plotly_chart(fig_ef_ts, width="stretch")
+                        st.plotly_chart(fig_ef_ts, use_container_width=True)
 
                     with ts_c4:
                         fig_rend_ts = px.line(
@@ -871,7 +871,7 @@ def page_analisis(dff: pd.DataFrame):
                             template="plotly_white", height=380,
                         )
                         fig_rend_ts.update_layout(margin=dict(l=20,r=20,t=50,b=40), legend=dict(font_size=10))
-                        st.plotly_chart(fig_rend_ts, width="stretch")
+                        st.plotly_chart(fig_rend_ts, use_container_width=True)
 
                     fig_cit_ts = px.bar(
                         df_serie, x="mes_label", y="citados", color="instrumento",
@@ -881,7 +881,7 @@ def page_analisis(dff: pd.DataFrame):
                         template="plotly_white", height=360,
                     )
                     fig_cit_ts.update_layout(margin=dict(l=20,r=20,t=50,b=40), legend=dict(font_size=10))
-                    st.plotly_chart(fig_cit_ts, width="stretch")
+                    st.plotly_chart(fig_cit_ts, use_container_width=True)
 
                     if len(inst_sel) > 8:
                         st.caption(f"ℹ️ Series temporales muestran los 8 instrumentos con mayor volumen. La tabla incluye todos los {len(inst_sel)} seleccionados.")
@@ -914,7 +914,7 @@ def page_analisis(dff: pd.DataFrame):
             col1, col2 = st.columns(2)
             with col1:
                 fig_ta = chart_tipo_atencion(dff_ta, top_n=len(tipos_sel))
-                st.plotly_chart(fig_ta, width="stretch")
+                st.plotly_chart(fig_ta, use_container_width=True)
             with col2:
                 from src.kpis import calc_no_show
                 ta_noshow = (
@@ -943,7 +943,7 @@ def page_analisis(dff: pd.DataFrame):
                     margin=dict(l=10, r=60, t=50, b=40),
                     xaxis=dict(range=[0, max(ta_noshow["no_show"].max() * 1.2, 20)], title="No-Show (%)"),
                 )
-                st.plotly_chart(fig_ns, width="stretch")
+                st.plotly_chart(fig_ns, use_container_width=True)
 
             # ── Sección 2: KPIs completos por tipo ────────────────────
             st.markdown("##### KPIs por Tipo de Atención")
@@ -980,7 +980,7 @@ def page_analisis(dff: pd.DataFrame):
                     "Sobrecupo", "Ag. Remoto", "Rendim. (min)"
                 ]
                 df_kpis_disp = df_kpis_disp[cols_show].rename(columns={"tipo_atencion": "Tipo de Atención"})
-                st.dataframe(df_kpis_disp, width="stretch", hide_index=True)
+                st.dataframe(df_kpis_disp, use_container_width=True, hide_index=True)
 
             # ── Sección 3: Series temporales ──────────────────────────
             st.markdown("##### Evolución Temporal por Tipo de Atención")
@@ -1018,7 +1018,7 @@ def page_analisis(dff: pd.DataFrame):
                                              annotation_text="Meta 65%", annotation_position="bottom right")
                         fig_ocu_ts.update_layout(margin=dict(l=20, r=20, t=50, b=40),
                                                   legend=dict(font_size=10))
-                        st.plotly_chart(fig_ocu_ts, width="stretch")
+                        st.plotly_chart(fig_ocu_ts, use_container_width=True)
 
                     with met_col2:
                         fig_ns_ts = px.line(
@@ -1035,7 +1035,7 @@ def page_analisis(dff: pd.DataFrame):
                                             annotation_text="Umbral 10%", annotation_position="top right")
                         fig_ns_ts.update_layout(margin=dict(l=20, r=20, t=50, b=40),
                                                  legend=dict(font_size=10))
-                        st.plotly_chart(fig_ns_ts, width="stretch")
+                        st.plotly_chart(fig_ns_ts, use_container_width=True)
 
                     met_col3, met_col4 = st.columns(2)
 
@@ -1054,7 +1054,7 @@ def page_analisis(dff: pd.DataFrame):
                                             annotation_text="Meta 88%", annotation_position="bottom right")
                         fig_ef_ts.update_layout(margin=dict(l=20, r=20, t=50, b=40),
                                                  legend=dict(font_size=10))
-                        st.plotly_chart(fig_ef_ts, width="stretch")
+                        st.plotly_chart(fig_ef_ts, use_container_width=True)
 
                     with met_col4:
                         fig_vol_ts = px.bar(
@@ -1069,7 +1069,7 @@ def page_analisis(dff: pd.DataFrame):
                         )
                         fig_vol_ts.update_layout(margin=dict(l=20, r=20, t=50, b=40),
                                                   legend=dict(font_size=10))
-                        st.plotly_chart(fig_vol_ts, width="stretch")
+                        st.plotly_chart(fig_vol_ts, use_container_width=True)
 
                     if len(tipos_sel) > 8:
                         st.caption(f"ℹ️ Series temporales muestran los 8 tipos con mayor volumen. La tabla de KPIs incluye todos los {len(tipos_sel)} tipos seleccionados.")
@@ -1146,7 +1146,7 @@ def page_analisis(dff: pd.DataFrame):
                     colorscale=cfg["colorscale"],
                     zmin=cfg["zmin"], zmax=cfg["zmax"], suffix=cfg["suffix"],
                 )
-                st.plotly_chart(fig_h1, width="stretch")
+                st.plotly_chart(fig_h1, use_container_width=True)
         else:
             st.info("Sin datos suficientes para el mapa de calor por instrumento.")
 
@@ -1165,7 +1165,7 @@ def page_analisis(dff: pd.DataFrame):
                     colorscale=cfg["colorscale"],
                     zmin=cfg["zmin"], zmax=cfg["zmax"], suffix=cfg["suffix"],
                 )
-                st.plotly_chart(fig_h2, width="stretch")
+                st.plotly_chart(fig_h2, use_container_width=True)
 
         # ── Tabla de extremos críticos ────────────────────────────────
         st.markdown(f"##### Combinaciones críticas — {metrica_sel}")
@@ -1186,7 +1186,7 @@ def page_analisis(dff: pd.DataFrame):
                 df_ext["Registros"] = df_ext["Registros"].apply(lambda v: f"{v:,}")
                 lbl = "peores" if cfg["mejor"] == "mayor" else "más altos"
                 st.caption(f"Top 10 combinaciones instrumento/mes con {lbl} resultado")
-                st.dataframe(df_ext, width="stretch", hide_index=True)
+                st.dataframe(df_ext, use_container_width=True, hide_index=True)
 
     with sub_tab4:
         if "GRUPO_ETARIO" in dff.columns:
@@ -1240,7 +1240,7 @@ def page_analisis(dff: pd.DataFrame):
                     yaxis_title="Citados",
                     margin=dict(l=30, r=20, t=50, b=40),
                 )
-                st.plotly_chart(fig_ge, width="stretch")
+                st.plotly_chart(fig_ge, use_container_width=True)
 
             with col2:
                 ge_noshow = (
@@ -1270,7 +1270,7 @@ def page_analisis(dff: pd.DataFrame):
                     yaxis_title="No-Show (%)",
                     margin=dict(l=30, r=20, t=50, b=40),
                 )
-                st.plotly_chart(fig_ns, width="stretch")
+                st.plotly_chart(fig_ns, use_container_width=True)
 
             with col3:
                 ge_efec = (
@@ -1301,7 +1301,7 @@ def page_analisis(dff: pd.DataFrame):
                     yaxis=dict(range=[0, 110]),
                     margin=dict(l=30, r=20, t=50, b=40),
                 )
-                st.plotly_chart(fig_ef, width="stretch")
+                st.plotly_chart(fig_ef, use_container_width=True)
 
             # ── Sección 2: Series temporales por grupo etario ─────────
             st.markdown("##### Evolución Mensual por Grupo Etario")
@@ -1337,7 +1337,7 @@ def page_analisis(dff: pd.DataFrame):
                                         annotation_text="Umbral 10%", annotation_position="top right")
                     fig_ns_ts.update_layout(margin=dict(l=20, r=20, t=50, b=40),
                                              legend=dict(font_size=11))
-                    st.plotly_chart(fig_ns_ts, width="stretch")
+                    st.plotly_chart(fig_ns_ts, use_container_width=True)
 
                 with ts_col2:
                     fig_ef_ts = px.line(
@@ -1354,7 +1354,7 @@ def page_analisis(dff: pd.DataFrame):
                                         annotation_text="Meta 88%", annotation_position="bottom right")
                     fig_ef_ts.update_layout(margin=dict(l=20, r=20, t=50, b=40),
                                              legend=dict(font_size=11))
-                    st.plotly_chart(fig_ef_ts, width="stretch")
+                    st.plotly_chart(fig_ef_ts, use_container_width=True)
 
                 # Volumen de citados por mes (stacked bars para ver predominancia)
                 fig_vol_ts = px.bar(
@@ -1369,7 +1369,7 @@ def page_analisis(dff: pd.DataFrame):
                 )
                 fig_vol_ts.update_layout(margin=dict(l=20, r=20, t=50, b=40),
                                           legend=dict(font_size=11))
-                st.plotly_chart(fig_vol_ts, width="stretch")
+                st.plotly_chart(fig_vol_ts, use_container_width=True)
         else:
             st.info("Columna de grupo etario no disponible en los datos cargados.")
 
@@ -1445,7 +1445,7 @@ def page_analisis(dff: pd.DataFrame):
                         yaxis=dict(range=[0, 110]), showlegend=False,
                         margin=dict(l=20, r=20, t=50, b=40),
                     )
-                    st.plotly_chart(fig_c, width="stretch")
+                    st.plotly_chart(fig_c, use_container_width=True)
 
             # ── Ocupación extendida por Instrumento ───────────────────
             if not dff_ext.empty and "INSTRUMENTO" in dff_ext.columns:
@@ -1479,7 +1479,7 @@ def page_analisis(dff: pd.DataFrame):
                         margin=dict(l=10, r=60, t=50, b=40),
                         xaxis=dict(range=[0, 110], title="Ocupación (%)"),
                     )
-                    st.plotly_chart(fig_ie, width="stretch")
+                    st.plotly_chart(fig_ie, use_container_width=True)
 
             # ── Serie temporal: ocupación extendida por mes ───────────
             if "MES_NUM" in dff.columns and dff["MES_NUM"].nunique() >= 2:
@@ -1513,7 +1513,7 @@ def page_analisis(dff: pd.DataFrame):
                 fig_ts_he.add_hline(y=65, line_dash="dot", line_color="#27AE60",
                                     annotation_text="Meta Normal 65%", annotation_position="bottom right")
                 fig_ts_he.update_layout(margin=dict(l=20, r=20, t=50, b=40))
-                st.plotly_chart(fig_ts_he, width="stretch")
+                st.plotly_chart(fig_ts_he, use_container_width=True)
 
             # ── Distribución de cupos por hora ────────────────────────
             st.markdown("##### Distribución de Cupos por Hora del Día")
@@ -1538,7 +1538,7 @@ def page_analisis(dff: pd.DataFrame):
             fig_horas.add_vline(x=17.5, line_dash="dash", line_color="#E74C3C",
                                 annotation_text="18:00 hrs", annotation_position="top right")
             fig_horas.update_layout(margin=dict(l=20, r=20, t=50, b=40))
-            st.plotly_chart(fig_horas, width="stretch")
+            st.plotly_chart(fig_horas, use_container_width=True)
 
 
 # ─────────────────────────────────────────────────────────────
@@ -1629,7 +1629,7 @@ def page_alertas(dff: pd.DataFrame):
                     return "color: #E74C3C; font-weight: bold"
             return ""
 
-        styled_c = df_c_display.style.applymap(color_ocupacion, subset=["Ocupación %"]).format({
+        styled_c = df_c_display.style.map(color_ocupacion, subset=["Ocupación %"]).format({
             "Ocupación %": "{:.1f}",
             "No-Show %": "{:.1f}",
             "Bloqueo %": "{:.1f}",
@@ -1637,7 +1637,7 @@ def page_alertas(dff: pd.DataFrame):
             "Rendimiento (min)": "{:.1f}",
             "Total Registros": "{:,.0f}",
         })
-        st.dataframe(styled_c, width="stretch", hide_index=True)
+        st.dataframe(styled_c, use_container_width=True, hide_index=True)
 
 
 # ─────────────────────────────────────────────────────────────

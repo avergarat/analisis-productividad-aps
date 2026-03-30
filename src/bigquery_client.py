@@ -321,17 +321,23 @@ def load_filtered(
     try:
         client = _client()
 
-        def _in(col: str, vals: list) -> str:
+        def _in_str(col: str, vals: list) -> str:
+            """Cláusula IN para columnas STRING."""
             escaped = ", ".join([f"'{str(v).replace(chr(39), chr(39)*2)}'" for v in vals])
             return f"{col} IN ({escaped})"
 
+        def _in_int(col: str, vals: list) -> str:
+            """Cláusula IN para columnas INTEGER (sin comillas)."""
+            nums = ", ".join([str(int(v)) for v in vals])
+            return f"{col} IN ({nums})"
+
         conds = []
-        if centros:         conds.append(_in("establecimiento", centros))
-        if meses:           conds.append(_in("mes_num", meses))
-        if instrumentos:    conds.append(_in("instrumento", instrumentos))
-        if sectores:        conds.append(_in("sector", sectores))
-        if tipos_atencion:  conds.append(_in("tipo_atencion", tipos_atencion))
-        if tipos_cupo:      conds.append(_in("tipo_cupo", tipos_cupo))
+        if centros:         conds.append(_in_str("establecimiento", centros))
+        if meses:           conds.append(_in_int("mes_num", meses))      # INT64
+        if instrumentos:    conds.append(_in_str("instrumento", instrumentos))
+        if sectores:        conds.append(_in_str("sector", sectores))
+        if tipos_atencion:  conds.append(_in_str("tipo_atencion", tipos_atencion))
+        if tipos_cupo:      conds.append(_in_str("tipo_cupo", tipos_cupo))
         where = f"WHERE {' AND '.join(conds)}" if conds else ""
 
         n = list(client.query(

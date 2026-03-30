@@ -56,7 +56,8 @@ from src.processor import process_iris_file, consolidate_files
 from src.kpis import (
     calculate_all_kpis, kpis_por_mes, kpis_por_instrumento,
     kpis_por_centro, detectar_alertas, KPI_DEFINITIONS,
-    kpis_por_tipo_atencion, kpis_tipo_atencion_mes
+    kpis_por_tipo_atencion, kpis_tipo_atencion_mes,
+    kpis_instrumento_mes
 )
 from src.charts import (
     chart_ranking_centros, chart_evolucion_mensual, chart_heatmap_instrumento_mes,
@@ -711,47 +712,156 @@ def page_analisis(dff: pd.DataFrame):
     ])
 
     with sub_tab1:
-        col1, col2 = st.columns(2)
-        with col1:
-            fig_rend = chart_rendimiento_instrumento(dff)
-            st.plotly_chart(fig_rend)
-        with col2:
-            df_inst = kpis_por_instrumento(dff)
-            if not df_inst.empty:
-                import plotly.graph_objects as go
-                colors = [
-                    "#27AE60" if v >= 65 else "#F39C12" if v >= 50 else "#E74C3C"
-                    for v in df_inst["ocupacion"]
-                ]
-                fig_inst = go.Figure(go.Bar(
-                    x=df_inst["ocupacion"],
-                    y=df_inst["instrumento"].str[:28],
-                    orientation="h",
-                    marker_color=colors,
-                    text=[f"{v:.1f}%" for v in df_inst["ocupacion"]],
-                    textposition="outside",
-                    hovertemplate="<b>%{y}</b><br>Ocupación: %{x:.1f}%<extra></extra>",
-                ))
-                fig_inst.update_layout(
-                    title="Ocupación por Instrumento (%)",
-                    template="plotly_white",
-                    height=max(350, len(df_inst) * 32 + 80),
-                    margin=dict(l=40, r=20, t=50, b=40),
-                    xaxis=dict(range=[0, 105], title="Ocupación (%)"),
-                )
-                st.plotly_chart(fig_inst)
+        import plotly.graph_objects as go
+        import plotly.express as px
 
-        # Tabla resumen por instrumento
-        st.markdown("##### Tabla de KPIs por Instrumento")
-        df_inst2 = kpis_por_instrumento(dff)
-        if not df_inst2.empty:
-            df_inst2_disp = df_inst2.copy()
-            df_inst2_disp.columns = [
-                "Instrumento", "Ocupación %", "No-Show %",
-                "Efectividad %", "Rendimiento (min)", "Total Registros", "Citados"
-            ]
-            df_inst2_disp = df_inst2_disp.round(1)
-            st.dataframe(df_inst2_disp, use_container_width=True, hide_index=True)
+        if "INSTRUMENTO" not in dff.columns or dff.empty:
+            st.warning("No hay datos de Instrumento con los filtros seleccionados.")
+        else:
+            # ── Filtro propio del tab ──────────────────────────────────
+            todos_inst = sorted(dff["INSTRUMENTO"].dropna().unique().tolist())
+            inst_sel = st.multiselect(
+                "Filtrar Instrumentos / Profesionales",
+                options=todos_inst,
+                default=todos_inst,
+                key="filt_inst_det",
+                help="Selecciona uno o más instrumentos para analizar.",
+            )
+            if not inst_sel:
+                inst_sel = todos_inst
+            dff_inst = dff[dff["INSTRUMENTO"].isin(inst_sel)]
+
+            # ── Sección 1: Rendimiento y Ocupación ────────────────────
+            st.markdown("##### Rendimiento y Ocupación por Instrumento")
+            col1, col2 = st.columns(2)
+            with col1:
+                fig_rend = chart_rendimiento_instrumento(dff_inst)
+                st.plotly_chart(fig_rend, use_container_width=True)
+            with col2:
+                df_inst_kpi = kpis_por_instrumento(dff_inst)
+                if not df_inst_kpi.empty:
+                    colors = [
+                        "#27AE60" if v >= 65 else "#F39C12" if v >= 50 else "#E74C3C"
+                        for v in df_inst_kpi["ocupacion"]
+                    ]
+                    fig_ocu = go.Figure(go.Bar(
+                        x=df_inst_kpi["ocupacion"],
+                        y=df_inst_kpi["instrumento"].str[:28],
+                        orientation="h",
+                        marker_color=colors,
+                        text=[f"{v:.1f}%" for v in df_inst_kpi["ocupacion"]],
+                        textposition="outside",
+                        hovertemplate="<b>%{y}</b><br>Ocupación: %{x:.1f}%<extra></extra>",
+                    ))
+                    fig_ocu.update_layout(
+                        title="Ocupación por Instrumento (%)",
+                        template="plotly_white",
+                        height=max(350, len(df_inst_kpi) * 32 + 80),
+                        margin=dict(l=10, r=60, t=50, b=40),
+                        xaxis=dict(range=[0, 110], title="Ocupación (%)"),
+                    )
+                    st.plotly_chart(fig_ocu, use_container_width=True)
+
+            # ── Sección 2: Tabla completa de KPIs con semáforos ───────
+            st.markdown("##### KPIs por Instrumento")
+            df_inst_kpi2 = kpis_por_instrumento(dff_inst)
+            if not df_inst_kpi2.empty:
+                from src.kpis import semaforo as _sem
+
+                def _icon(val, kpi):
+                    return {"verde": "🟢", "amarillo": "🟡", "rojo": "🔴"}.get(_sem(val, kpi), "⚪")
+
+                df_disp = df_inst_kpi2.copy()
+                df_disp["Ocupación"]      = df_disp.apply(lambda r: f"{_icon(r['ocupacion'],'ocupacion')} {r['ocupacion']:.1f}%", axis=1)
+                df_disp["No-Show"]        = df_disp.apply(lambda r: f"{_icon(r['no_show'],'no_show')} {r['no_show']:.1f}%", axis=1)
+                df_disp["Efectividad"]    = df_disp.apply(lambda r: f"{_icon(r['efectividad'],'efectividad')} {r['efectividad']:.1f}%", axis=1)
+                df_disp["Rendim. (min)"]  = df_disp["rendimiento"].round(1)
+                df_disp["Total"]          = df_disp["total"].apply(lambda v: f"{v:,}")
+                df_disp["Citados"]        = df_disp["citados"].apply(lambda v: f"{v:,}")
+                st.dataframe(
+                    df_disp[["instrumento","Total","Citados","Ocupación","No-Show","Efectividad","Rendim. (min)"]].rename(columns={"instrumento":"Instrumento"}),
+                    use_container_width=True, hide_index=True
+                )
+
+            # ── Sección 3: Series temporales ──────────────────────────
+            st.markdown("##### Evolución Temporal por Instrumento")
+            if "MES_NUM" not in dff_inst.columns or dff_inst["MES_NUM"].nunique() < 2:
+                st.info("Se necesitan al menos 2 meses de datos para mostrar series temporales.")
+            else:
+                # Limitar a 8 instrumentos para legibilidad
+                top8_inst = (
+                    dff_inst["INSTRUMENTO"].value_counts().head(8).index.tolist()
+                )
+                inst_serie = [i for i in inst_sel if i in top8_inst][:8] or inst_sel[:8]
+                df_serie = kpis_instrumento_mes(dff_inst, tuple(inst_serie))
+
+                if not df_serie.empty:
+                    ts_c1, ts_c2 = st.columns(2)
+
+                    with ts_c1:
+                        fig_ocu_ts = px.line(
+                            df_serie, x="mes_label", y="ocupacion", color="instrumento",
+                            markers=True,
+                            labels={"mes_label":"Mes","ocupacion":"Ocupación (%)","instrumento":"Instrumento"},
+                            title="Tasa de Ocupación por Mes",
+                            template="plotly_white", height=380,
+                        )
+                        fig_ocu_ts.add_hline(y=65, line_dash="dash", line_color="#27AE60",
+                                             annotation_text="Meta 65%", annotation_position="bottom right")
+                        fig_ocu_ts.update_layout(margin=dict(l=20,r=20,t=50,b=40), legend=dict(font_size=10))
+                        st.plotly_chart(fig_ocu_ts, use_container_width=True)
+
+                    with ts_c2:
+                        fig_ns_ts = px.line(
+                            df_serie, x="mes_label", y="no_show", color="instrumento",
+                            markers=True,
+                            labels={"mes_label":"Mes","no_show":"No-Show (%)","instrumento":"Instrumento"},
+                            title="Tasa de No-Show por Mes",
+                            template="plotly_white", height=380,
+                        )
+                        fig_ns_ts.add_hline(y=10, line_dash="dash", line_color="#E74C3C",
+                                            annotation_text="Umbral 10%", annotation_position="top right")
+                        fig_ns_ts.update_layout(margin=dict(l=20,r=20,t=50,b=40), legend=dict(font_size=10))
+                        st.plotly_chart(fig_ns_ts, use_container_width=True)
+
+                    ts_c3, ts_c4 = st.columns(2)
+
+                    with ts_c3:
+                        fig_ef_ts = px.line(
+                            df_serie, x="mes_label", y="efectividad", color="instrumento",
+                            markers=True,
+                            labels={"mes_label":"Mes","efectividad":"Efectividad (%)","instrumento":"Instrumento"},
+                            title="Efectividad de Cita por Mes",
+                            template="plotly_white", height=380,
+                        )
+                        fig_ef_ts.add_hline(y=88, line_dash="dash", line_color="#27AE60",
+                                            annotation_text="Meta 88%", annotation_position="bottom right")
+                        fig_ef_ts.update_layout(margin=dict(l=20,r=20,t=50,b=40), legend=dict(font_size=10))
+                        st.plotly_chart(fig_ef_ts, use_container_width=True)
+
+                    with ts_c4:
+                        fig_rend_ts = px.line(
+                            df_serie, x="mes_label", y="rendimiento", color="instrumento",
+                            markers=True,
+                            labels={"mes_label":"Mes","rendimiento":"Rendimiento (min)","instrumento":"Instrumento"},
+                            title="Rendimiento Promedio por Mes (min)",
+                            template="plotly_white", height=380,
+                        )
+                        fig_rend_ts.update_layout(margin=dict(l=20,r=20,t=50,b=40), legend=dict(font_size=10))
+                        st.plotly_chart(fig_rend_ts, use_container_width=True)
+
+                    fig_cit_ts = px.bar(
+                        df_serie, x="mes_label", y="citados", color="instrumento",
+                        barmode="group",
+                        labels={"mes_label":"Mes","citados":"Citados","instrumento":"Instrumento"},
+                        title="Citados por Mes e Instrumento",
+                        template="plotly_white", height=360,
+                    )
+                    fig_cit_ts.update_layout(margin=dict(l=20,r=20,t=50,b=40), legend=dict(font_size=10))
+                    st.plotly_chart(fig_cit_ts, use_container_width=True)
+
+                    if len(inst_sel) > 8:
+                        st.caption(f"ℹ️ Series temporales muestran los 8 instrumentos con mayor volumen. La tabla incluye todos los {len(inst_sel)} seleccionados.")
 
     with sub_tab2:
         import plotly.graph_objects as go

@@ -348,6 +348,42 @@ def kpis_por_centro(df: pd.DataFrame) -> pd.DataFrame:
 
 
 @_cache
+def kpis_instrumento_mes(df: pd.DataFrame, instrumentos: tuple) -> pd.DataFrame:
+    """
+    KPIs por mes para los instrumentos seleccionados.
+    instrumentos: tuple de strings (hashable para cache).
+    """
+    MESES_ES = {
+        1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr",
+        5: "May", 6: "Jun", 7: "Jul", 8: "Ago",
+        9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic"
+    }
+    if "INSTRUMENTO" not in df.columns or "MES_NUM" not in df.columns or df.empty:
+        return pd.DataFrame()
+
+    dff = df[df["INSTRUMENTO"].isin(instrumentos)] if instrumentos else df
+    if dff.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for (inst, mes), grp in dff.groupby(["INSTRUMENTO", "MES_NUM"]):
+        rows.append({
+            "instrumento": inst,
+            "mes": int(mes),
+            "mes_label": MESES_ES.get(int(mes), str(mes)),
+            "ocupacion": calc_ocupacion(grp),
+            "no_show": calc_no_show(grp),
+            "efectividad": calc_efectividad(grp),
+            "bloqueo": calc_bloqueo(grp),
+            "rendimiento": calc_rendimiento(grp),
+            "total": len(grp),
+            "citados": int((grp["ESTADO CUPO"] == "CITADO").sum()),
+        })
+
+    return pd.DataFrame(rows).sort_values(["instrumento", "mes"])
+
+
+@_cache
 def kpis_por_tipo_atencion(df: pd.DataFrame) -> pd.DataFrame:
     """KPIs agrupados por TIPO ATENCION."""
     if "TIPO ATENCION" not in df.columns or df.empty:

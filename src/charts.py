@@ -353,7 +353,7 @@ def chart_rendimiento_instrumento(df: pd.DataFrame) -> go.Figure:
         return go.Figure()
 
     df_clean = df[["INSTRUMENTO", "RENDIMIENTO"]].dropna()
-    grouped = df_clean.groupby("INSTRUMENTO")["RENDIMIENTO"].mean().reset_index()
+    grouped = df_clean.groupby("INSTRUMENTO", observed=True)["RENDIMIENTO"].mean().reset_index()
     grouped = grouped.sort_values("RENDIMIENTO")
     grouped["INSTRUMENTO_CORTO"] = grouped["INSTRUMENTO"].str[:28]
 

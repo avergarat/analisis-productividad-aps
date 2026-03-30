@@ -256,7 +256,7 @@ def _calc_variacion_mensual(df: pd.DataFrame) -> dict:
         return {"valor": 0.0, "semaforo": "gris", **defn}
 
     monthly = (
-        df.groupby("MES_NUM")
+        df.groupby("MES_NUM", observed=True)
         .apply(lambda x: calc_ocupacion(x))
         .reset_index(name="ocupacion")
     )
@@ -288,7 +288,7 @@ def kpis_por_mes(df: pd.DataFrame) -> pd.DataFrame:
     }
 
     rows = []
-    for mes, grp in df.groupby("MES_NUM"):
+    for mes, grp in df.groupby("MES_NUM", observed=True):
         row = {"mes": mes, "mes_nombre": MESES_ES.get(int(mes), str(mes))}
         row["ocupacion"] = calc_ocupacion(grp)
         row["no_show"] = calc_no_show(grp)
@@ -314,7 +314,7 @@ def kpis_por_instrumento(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     rows = []
-    for instrumento, grp in df.groupby("INSTRUMENTO"):
+    for instrumento, grp in df.groupby("INSTRUMENTO", observed=True):
         row = {"instrumento": instrumento}
         row["ocupacion"] = calc_ocupacion(grp)
         row["no_show"] = calc_no_show(grp)
@@ -334,7 +334,7 @@ def kpis_por_centro(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     rows = []
-    for centro, grp in df.groupby("ESTABLECIMIENTO"):
+    for centro, grp in df.groupby("ESTABLECIMIENTO", observed=True):
         row = {"centro": centro}
         row["ocupacion"] = calc_ocupacion(grp)
         row["no_show"] = calc_no_show(grp)
@@ -366,7 +366,7 @@ def kpis_instrumento_mes(df: pd.DataFrame, instrumentos: tuple) -> pd.DataFrame:
         return pd.DataFrame()
 
     rows = []
-    for (inst, mes), grp in dff.groupby(["INSTRUMENTO", "MES_NUM"]):
+    for (inst, mes), grp in dff.groupby(["INSTRUMENTO", "MES_NUM"], observed=True):
         rows.append({
             "instrumento": inst,
             "mes": int(mes),
@@ -390,7 +390,7 @@ def kpis_por_tipo_atencion(df: pd.DataFrame) -> pd.DataFrame:
         return pd.DataFrame()
 
     rows = []
-    for tipo, grp in df.groupby("TIPO ATENCION"):
+    for tipo, grp in df.groupby("TIPO ATENCION", observed=True):
         row = {"tipo_atencion": tipo}
         row["ocupacion"] = calc_ocupacion(grp)
         row["no_show"] = calc_no_show(grp)
@@ -428,7 +428,7 @@ def kpis_tipo_atencion_mes(df: pd.DataFrame, tipos: tuple) -> pd.DataFrame:
         return pd.DataFrame()
 
     rows = []
-    for (tipo, mes), grp in dff.groupby(["TIPO ATENCION", "MES_NUM"]):
+    for (tipo, mes), grp in dff.groupby(["TIPO ATENCION", "MES_NUM"], observed=True):
         row = {
             "tipo_atencion": tipo,
             "mes": int(mes),

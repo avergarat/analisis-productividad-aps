@@ -970,32 +970,37 @@ def page_analisis(dff: pd.DataFrame):
                 st.plotly_chart(fig_ge)
 
             with col2:
-                # Ocupación por grupo etario
-                from src.kpis import calc_ocupacion
-                ge_ocup = (
-                    dff.groupby("GRUPO_ETARIO", observed=True)
-                    .apply(calc_ocupacion)
-                    .reset_index(name="ocupacion")
+                # No-Show por grupo etario
+                # (GRUPO_ETARIO es atributo del paciente → solo existe en cupos CITADO;
+                #  calcular ocupación por edad sería siempre 100% porque los cupos
+                #  DISPONIBLE no tienen paciente asignado ni edad)
+                from src.kpis import calc_no_show
+                ge_noshow = (
+                    dff[dff["ESTADO CUPO"] == "CITADO"]
+                    .groupby("GRUPO_ETARIO", observed=True)
+                    .apply(calc_no_show)
+                    .reset_index(name="no_show")
                 )
                 colors_ge = [
-                    "#27AE60" if v >= 65 else "#F39C12" if v >= 50 else "#E74C3C"
-                    for v in ge_ocup["ocupacion"]
+                    "#E74C3C" if v > 15 else "#F39C12" if v > 10 else "#27AE60"
+                    for v in ge_noshow["no_show"]
                 ]
                 fig_ge2 = go.Figure(go.Bar(
-                    x=ge_ocup["GRUPO_ETARIO"].astype(str),
-                    y=ge_ocup["ocupacion"],
+                    x=ge_noshow["GRUPO_ETARIO"].astype(str),
+                    y=ge_noshow["no_show"],
                     marker_color=colors_ge,
-                    text=[f"{v:.1f}%" for v in ge_ocup["ocupacion"]],
+                    text=[f"{v:.1f}%" for v in ge_noshow["no_show"]],
                     textposition="outside",
+                    hovertemplate="<b>%{x}</b><br>No-Show: %{y:.1f}%<extra></extra>",
                 ))
-                fig_ge2.add_hline(y=65, line_dash="dash", line_color="#27AE60",
-                                   annotation_text="Meta 65%")
+                fig_ge2.add_hline(y=10, line_dash="dash", line_color="#E74C3C",
+                                   annotation_text="Umbral 10%")
                 fig_ge2.update_layout(
-                    title="Ocupación por Grupo Etario",
+                    title="No-Show por Grupo Etario",
                     template="plotly_white",
                     height=380,
                     xaxis_title="Grupo Etario",
-                    yaxis_title="Ocupación (%)",
+                    yaxis_title="No-Show (%)",
                     margin=dict(l=40, r=20, t=50, b=40),
                 )
                 st.plotly_chart(fig_ge2)

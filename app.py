@@ -2390,6 +2390,422 @@ def page_informe_centro(dff: pd.DataFrame):
         f"Servicio de Salud Metropolitano Central · {centro_sel} · Período: {rango_meses}*"
     )
 
+    # ══════════════════════════════════════════════════════════════════════════
+    # BOTÓN DE DESCARGA
+    # ══════════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### 📥 Descargar Informe")
+    st.markdown("Descarga el informe completo en formato HTML con todos los gráficos embebidos. "
+                "Puedes abrirlo en cualquier navegador e imprimir como PDF (Ctrl+P).")
+
+    with st.spinner("Generando informe descargable..."):
+        html_report = _generar_html_informe(
+            centro_sel=centro_sel,
+            rango_meses=rango_meses,
+            n_meses=n_meses,
+            total_registros=total_registros,
+            citados=citados,
+            disponibles=disponibles,
+            bloqueados=bloqueados,
+            atendidos=atendidos,
+            kpis=kpis,
+            df_centro=df_centro,
+            df_inst_c=df_inst_c,
+            df_kpis_ta=df_kpis_ta if not df_kpis_ta.empty else pd.DataFrame(),
+            alertas_centro=alertas_centro,
+            n_verde=n_verde,
+            n_amarillo=n_amarillo,
+            n_rojo=n_rojo,
+        )
+
+    nombre_archivo = f"Informe_{centro_sel.replace(' ', '_')}_{rango_meses.replace(' ', '_')}.html"
+    st.download_button(
+        label="📥 Descargar Informe HTML",
+        data=html_report.encode("utf-8"),
+        file_name=nombre_archivo,
+        mime="text/html",
+        type="primary",
+        use_container_width=True,
+    )
+
+
+def _generar_html_informe(
+    centro_sel, rango_meses, n_meses, total_registros,
+    citados, disponibles, bloqueados, atendidos,
+    kpis, df_centro, df_inst_c, df_kpis_ta,
+    alertas_centro, n_verde, n_amarillo, n_rojo,
+) -> str:
+    """Genera informe HTML autocontenido con gráficos embebidos como imágenes base64."""
+    import plotly.graph_objects as go
+    import plotly.io as pio
+    import base64
+    from src.kpis import semaforo, KPI_DEFINITIONS
+    from src.charts import (
+        chart_estado_cupos, chart_evolucion_mensual, chart_noshow_vs_umbral,
+        chart_rendimiento_instrumento, chart_sector, chart_tipo_atencion,
+        chart_multi_kpi, chart_heatmap_instrumento_mes,
+    )
+
+    def _fig_to_img(fig, width=900, height=450):
+        """Convierte fig Plotly a tag <img> base64 PNG."""
+        try:
+            img_bytes = pio.to_image(fig, format="png", width=width, height=height, scale=2)
+            b64 = base64.b64encode(img_bytes).decode()
+            return f'<img src="data:image/png;base64,{b64}" style="width:100%;max-width:{width}px;">'
+        except Exception:
+            # Si kaleido no está, usar plotly HTML interactivo embebido
+            return fig.to_html(include_plotlyjs="cdn", full_html=False,
+                               config={"staticPlot": True})
+
+    def _sem_icon(val, kpi):
+        s = semaforo(val, kpi)
+        return {"verde": "🟢", "amarillo": "🟡", "rojo": "🔴"}.get(s, "⚪")
+
+    def _sem_text(val, kpi):
+        s = semaforo(val, kpi)
+        return {"verde": "Óptimo", "amarillo": "Observación", "rojo": "Crítico"}.get(s, "—")
+
+    # ── Generar gráficos ──────────────────────────────────────────────────────
+    charts_html = {}
+
+    # G1: Estado de cupos
+    fig1 = chart_estado_cupos(df_centro)
+    fig1.update_layout(height=420)
+    charts_html["cupos"] = _fig_to_img(fig1)
+
+    # G2: Ocupación mensual
+    df_meses_c = _kpis_por_mes_centro(df_centro)
+    if not df_meses_c.empty and len(df_meses_c) >= 2:
+        fig2 = chart_evolucion_mensual(df_meses_c, "ocupacion", "Tasa de Ocupación",
+                                        umbral_ok=65, umbral_alerta=50)
+        fig2.update_layout(height=420)
+        charts_html["ocu_mensual"] = _fig_to_img(fig2)
+
+    # G3: Ocupación por instrumento
+    if not df_inst_c.empty:
+        df_plot = df_inst_c.sort_values("ocupacion")
+        colors_ocu = ["#27AE60" if v >= 65 else "#F39C12" if v >= 50 else "#E74C3C"
+                      for v in df_plot["ocupacion"]]
+        fig3 = go.Figure(go.Bar(
+            x=df_plot["ocupacion"], y=df_plot["instrumento"].str[:30],
+            orientation="h", marker_color=colors_ocu,
+            text=[f"{v:.1f}%" for v in df_plot["ocupacion"]], textposition="outside",
+        ))
+        fig3.add_vline(x=65, line_dash="dash", line_color="#27AE60", annotation_text="Meta 65%")
+        fig3.update_layout(title="Ocupación por Instrumento", template="plotly_white",
+                           height=max(400, len(df_plot)*40+100),
+                           xaxis=dict(title="Ocupación (%)", range=[0, 105]), yaxis=dict(title=""))
+        charts_html["ocu_inst"] = _fig_to_img(fig3, height=max(400, len(df_plot)*40+100))
+
+    # G4: No-Show mensual
+    if not df_meses_c.empty and len(df_meses_c) >= 2:
+        fig4 = chart_noshow_vs_umbral(df_meses_c)
+        fig4.update_layout(height=420)
+        charts_html["noshow"] = _fig_to_img(fig4)
+
+    # G5: Bloqueo mensual
+    if not df_meses_c.empty and len(df_meses_c) >= 2:
+        fig5 = chart_evolucion_mensual(df_meses_c, "bloqueo", "Tasa de Bloqueo",
+                                        umbral_ok=10, umbral_alerta=15)
+        fig5.update_layout(height=420)
+        charts_html["bloqueo"] = _fig_to_img(fig5)
+
+    # G6: Efectividad mensual
+    if not df_meses_c.empty and len(df_meses_c) >= 2:
+        fig6 = chart_evolucion_mensual(df_meses_c, "efectividad", "Efectividad de Cita",
+                                        umbral_ok=88, umbral_alerta=80)
+        fig6.update_layout(height=420)
+        charts_html["efectividad"] = _fig_to_img(fig6)
+
+    # G7: Rendimiento por instrumento
+    fig7 = chart_rendimiento_instrumento(df_centro)
+    fig7.update_layout(height=max(400, len(df_inst_c)*40+100) if not df_inst_c.empty else 400)
+    charts_html["rendimiento"] = _fig_to_img(fig7)
+
+    # G8: Sector territorial
+    fig8 = chart_sector(df_centro)
+    fig8.update_layout(height=420)
+    charts_html["sector"] = _fig_to_img(fig8)
+
+    # G9: Tipo de atención
+    fig9 = chart_tipo_atencion(df_centro, top_n=15)
+    fig9.update_layout(height=500)
+    charts_html["tipo_atencion"] = _fig_to_img(fig9, height=500)
+
+    # G10: Multi-KPI
+    if not df_meses_c.empty and len(df_meses_c) >= 2:
+        fig10 = chart_multi_kpi(df_meses_c)
+        fig10.update_layout(height=450)
+        charts_html["multi_kpi"] = _fig_to_img(fig10)
+
+    # G11: Heatmap
+    if "MES_NUM" in df_centro.columns and "INSTRUMENTO" in df_centro.columns:
+        fig11 = chart_heatmap_instrumento_mes(df_centro)
+        n_i = df_centro["INSTRUMENTO"].nunique()
+        fig11.update_layout(height=max(450, n_i*38+120))
+        charts_html["heatmap"] = _fig_to_img(fig11, height=max(450, n_i*38+120))
+
+    # ── Tabla semáforo KPIs ───────────────────────────────────────────────────
+    kpi_rows_html = ""
+    kpi_order = [
+        ("ocupacion", "Tasa de Ocupación"), ("no_show", "Tasa de No-Show"),
+        ("bloqueo", "Tasa de Bloqueo"), ("efectividad", "Efectividad de Cita"),
+        ("rendimiento", "Rendimiento Promedio"), ("sobrecupo", "Cupos Sobrecupo"),
+        ("cobertura_sectorial", "Cobertura Sectorial"), ("agendamiento_remoto", "Agendamiento Remoto"),
+        ("variacion_mensual", "Variación Mensual"), ("ocupacion_extendida", "Ocupación Horario Extendido"),
+    ]
+    for key, label in kpi_order:
+        k = kpis.get(key, {})
+        valor = k.get("valor", 0)
+        unidad = k.get("unidad", "%")
+        sem = k.get("semaforo", "gris")
+        icon = {"verde": "🟢", "amarillo": "🟡", "rojo": "🔴"}.get(sem, "⚪")
+        meta = k.get("umbral_ok", "—")
+        alerta = k.get("umbral_alerta", "—")
+        desc = k.get("descripcion", "")
+        bg = {"rojo": "#FDEDEC", "amarillo": "#FEF9E7", "verde": "#EAFAF1"}.get(sem, "#fff")
+        kpi_rows_html += f'<tr style="background:{bg}"><td>{icon}</td><td><strong>{label}</strong></td><td>{valor:.1f} {unidad}</td><td>{meta}{unidad if meta != "—" else ""}</td><td>{alerta}{unidad if alerta != "—" else ""}</td><td style="font-size:0.85em">{desc}</td></tr>\n'
+
+    # ── Tabla instrumentos ────────────────────────────────────────────────────
+    inst_rows_html = ""
+    if not df_inst_c.empty:
+        for _, r in df_inst_c.iterrows():
+            inst_rows_html += (
+                f'<tr><td>{r["instrumento"]}</td><td>{r["total"]:,}</td><td>{r["citados"]:,}</td>'
+                f'<td>{r["disponibles"]:,}</td><td>{r["bloqueados"]:,}</td><td>{r["atendidos"]:,}</td>'
+                f'<td>{_sem_icon(r["ocupacion"],"ocupacion")} {r["ocupacion"]:.1f}%</td>'
+                f'<td>{_sem_icon(r["no_show"],"no_show")} {r["no_show"]:.1f}%</td>'
+                f'<td>{_sem_icon(r["efectividad"],"efectividad")} {r["efectividad"]:.1f}%</td>'
+                f'<td>{r["rendimiento"]:.1f}</td></tr>\n'
+            )
+
+    # ── Tabla tipo atención ───────────────────────────────────────────────────
+    ta_rows_html = ""
+    if not df_kpis_ta.empty:
+        for _, r in df_kpis_ta.iterrows():
+            ta_rows_html += (
+                f'<tr><td>{r["tipo_atencion"]}</td><td>{r["total"]:,}</td><td>{r["citados"]:,}</td>'
+                f'<td>{r["disponibles"]:,}</td><td>{r["bloqueados"]:,}</td><td>{r["atendidos"]:,}</td>'
+                f'<td>{_sem_icon(r["ocupacion"],"ocupacion")} {r["ocupacion"]:.1f}%</td>'
+                f'<td>{_sem_icon(r["no_show"],"no_show")} {r["no_show"]:.1f}%</td>'
+                f'<td>{_sem_icon(r["efectividad"],"efectividad")} {r["efectividad"]:.1f}%</td>'
+                f'<td>{r["rendimiento"]:.1f}</td></tr>\n'
+            )
+
+    # ── Alertas ───────────────────────────────────────────────────────────────
+    alertas_html = ""
+    if not alertas_centro:
+        alertas_html = '<div style="background:#D5F5E3;border-left:4px solid #27AE60;padding:1rem;border-radius:5px;"><strong>🟢 Sin brechas detectadas.</strong> Todos los indicadores dentro de umbrales aceptables.</div>'
+    else:
+        for a in alertas_centro:
+            sem_a = a.get("semaforo", "gris")
+            icon_a = "🔴" if sem_a == "rojo" else "🟡"
+            bg_a = "#FDEDEC" if sem_a == "rojo" else "#FEF9E7"
+            alertas_html += (
+                f'<div style="background:{bg_a};border-left:4px solid {"#E74C3C" if sem_a=="rojo" else "#F39C12"};'
+                f'padding:0.8rem;border-radius:5px;margin-bottom:0.5rem;">'
+                f'<strong>{icon_a} {a["tipo"]}</strong>: {a["valor"]:.1f} {a["unidad"]} — {a["descripcion"]}</div>\n'
+            )
+
+    # ── Conclusión ────────────────────────────────────────────────────────────
+    conclusion_html = (
+        f"<p>El centro <strong>{centro_sel}</strong> presenta <strong>{n_verde}</strong> indicadores en estado óptimo (🟢), "
+        f"<strong>{n_amarillo}</strong> en zona de observación (🟡) y <strong>{n_rojo}</strong> en brecha crítica (🔴) "
+        f"durante el período analizado ({rango_meses}).</p>"
+    )
+    if n_rojo > 0:
+        kpis_rojos = [k.get("nombre", key) for key, k in kpis.items()
+                      if isinstance(k, dict) and k.get("semaforo") == "rojo"]
+        conclusion_html += f"<p>Indicadores críticos: <strong>{', '.join(kpis_rojos)}</strong>. Se recomienda intervención inmediata.</p>"
+    if n_amarillo > 0:
+        kpis_amarillos = [k.get("nombre", key) for key, k in kpis.items()
+                          if isinstance(k, dict) and k.get("semaforo") == "amarillo"]
+        conclusion_html += f"<p>Indicadores en observación: <strong>{', '.join(kpis_amarillos)}</strong>. Se sugiere monitoreo continuo.</p>"
+    if n_rojo == 0 and n_amarillo == 0:
+        conclusion_html += "<p>Todos los indicadores se encuentran dentro de los umbrales. Se recomienda mantener las estrategias actuales.</p>"
+
+    # ── KPIs del centro ──
+    v_ocu = kpis.get("ocupacion", {}).get("valor", 0)
+    v_ns = kpis.get("no_show", {}).get("valor", 0)
+    v_bloq = kpis.get("bloqueo", {}).get("valor", 0)
+    v_efec = kpis.get("efectividad", {}).get("valor", 0)
+    v_rend = kpis.get("rendimiento", {}).get("valor", 0)
+    v_sobre = kpis.get("sobrecupo", {}).get("valor", 0)
+    v_cob = kpis.get("cobertura_sectorial", {}).get("valor", 0)
+    v_ag = kpis.get("agendamiento_remoto", {}).get("valor", 0)
+    v_ext = kpis.get("ocupacion_extendida", {}).get("valor", 0)
+
+    from datetime import datetime
+    fecha_gen = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    html = f"""<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Informe Productividad — {centro_sel}</title>
+<style>
+  @media print {{ body {{ margin: 0.5cm; }} .no-print {{ display: none; }} .page-break {{ page-break-before: always; }} }}
+  body {{ font-family: 'Segoe UI', Arial, sans-serif; color: #2C3E50; max-width: 1100px; margin: 0 auto; padding: 20px; line-height: 1.6; }}
+  h1 {{ color: #1B4F72; border-bottom: 3px solid #2E86C1; padding-bottom: 10px; }}
+  h2 {{ color: #1B4F72; margin-top: 2rem; border-left: 4px solid #2E86C1; padding-left: 12px; }}
+  .header {{ background: linear-gradient(135deg, #1B4F72, #2E86C1); color: white; padding: 25px 30px; border-radius: 10px; margin-bottom: 25px; }}
+  .header h1 {{ color: white; border: none; margin: 0; font-size: 1.8rem; }}
+  .header p {{ color: #AED6F1; margin: 5px 0 0; }}
+  .cards {{ display: flex; gap: 15px; flex-wrap: wrap; margin: 15px 0; }}
+  .card {{ background: #F8F9FA; border-radius: 8px; padding: 15px 20px; text-align: center; flex: 1; min-width: 140px; border-top: 4px solid #2E86C1; }}
+  .card .val {{ font-size: 1.6rem; font-weight: 700; color: #1B4F72; }}
+  .card .lbl {{ font-size: 0.8rem; color: #666; }}
+  table {{ border-collapse: collapse; width: 100%; margin: 15px 0; font-size: 0.9rem; }}
+  th {{ background: #1B4F72; color: white; padding: 10px 8px; text-align: left; }}
+  td {{ padding: 8px; border-bottom: 1px solid #ddd; }}
+  tr:nth-child(even) {{ background: #F8F9FA; }}
+  .chart-container {{ margin: 20px 0; text-align: center; }}
+  .chart-caption {{ font-size: 0.9rem; color: #555; margin-bottom: 10px; text-align: left; font-style: italic; }}
+  .footer {{ margin-top: 30px; padding-top: 15px; border-top: 2px solid #2E86C1; font-size: 0.8rem; color: #777; text-align: center; }}
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>📋 Informe Analítico de Productividad</h1>
+  <p>{centro_sel} · Servicio de Salud Metropolitano Central · Período: {rango_meses}</p>
+</div>
+
+<h2>1. Resumen Ejecutivo</h2>
+<p>El presente informe analiza la productividad del centro <strong>{centro_sel}</strong>
+durante el período <strong>{rango_meses}</strong> ({n_meses} meses),
+abarcando un total de <strong>{total_registros:,}</strong> registros de cupos programados en IRIS.
+De estos, <strong>{citados:,}</strong> corresponden a cupos citados, <strong>{disponibles:,}</strong>
+permanecieron disponibles, <strong>{bloqueados:,}</strong> fueron bloqueados administrativamente y
+<strong>{atendidos:,}</strong> registraron atención efectiva.</p>
+
+<div class="cards">
+  <div class="card"><div class="val">{total_registros:,}</div><div class="lbl">Total Registros</div></div>
+  <div class="card"><div class="val">{citados:,}</div><div class="lbl">Citados</div></div>
+  <div class="card"><div class="val">{disponibles:,}</div><div class="lbl">Disponibles</div></div>
+  <div class="card"><div class="val">{bloqueados:,}</div><div class="lbl">Bloqueados</div></div>
+  <div class="card"><div class="val">{atendidos:,}</div><div class="lbl">Atendidos</div></div>
+</div>
+
+<h2>2. Semáforo de Indicadores</h2>
+<p>Estado de los 10 indicadores clave del modelo de productividad APS.
+🟢 Dentro de meta · 🟡 En observación · 🔴 Brecha crítica.</p>
+<table>
+<tr><th>Estado</th><th>Indicador</th><th>Valor</th><th>Meta</th><th>Alerta</th><th>Descripción</th></tr>
+{kpi_rows_html}
+</table>
+
+<div class="page-break"></div>
+
+<h2>3. Distribución de Estado de Cupos</h2>
+<p class="chart-caption"><strong>Gráfico 1.</strong> Composición de cupos según estado final (Citado, Disponible, Bloqueado).
+Muestra qué proporción de la oferta programada fue efectivamente utilizada versus la que quedó sin asignar
+o fue retirada por bloqueo administrativo. Calculado como conteo de registros agrupados por <code>ESTADO CUPO</code>.</p>
+<div class="chart-container">{charts_html.get("cupos", "<p>Sin datos</p>")}</div>
+
+<h2>4. Análisis de Tasa de Ocupación</h2>
+<p>La <strong>Tasa de Ocupación</strong> mide el porcentaje de cupos asignados a un paciente
+respecto del total disponible para atención: <code>Citados ÷ (Citados + Disponibles) × 100</code>.
+El centro registra una ocupación de <strong>{v_ocu:.1f}%</strong> ({_sem_text(v_ocu, "ocupacion")}).
+Meta ≥ 65%, alerta < 50%.</p>
+{"<p class='chart-caption'><strong>Gráfico 2.</strong> Evolución mensual de la Tasa de Ocupación. La línea punteada verde indica la meta (65%%) y la roja el umbral de alerta (50%%).</p><div class='chart-container'>" + charts_html["ocu_mensual"] + "</div>" if "ocu_mensual" in charts_html else ""}
+{"<p class='chart-caption'><strong>Gráfico 3.</strong> Ocupación por instrumento (profesional). Permite comparar el aprovechamiento de la agenda entre profesionales. Calculado como <code>Citados ÷ (Citados + Disponibles) × 100</code> por instrumento.</p><div class='chart-container'>" + charts_html["ocu_inst"] + "</div>" if "ocu_inst" in charts_html else ""}
+
+<div class="page-break"></div>
+
+<h2>5. Análisis de Tasa de No-Show (Inasistencia)</h2>
+<p>La <strong>Tasa de No-Show</strong> representa el porcentaje de pacientes citados que no asistieron:
+<code>(Citados − Completados) ÷ Citados × 100</code>.
+El centro presenta un No-Show de <strong>{v_ns:.1f}%</strong> ({_sem_text(v_ns, "no_show")}).
+Meta ≤ 10%, alerta > 15%.</p>
+{"<p class='chart-caption'><strong>Gráfico 4.</strong> Evolución mensual del No-Show vs umbral institucional (10%%). Barras coloreadas según gravedad.</p><div class='chart-container'>" + charts_html["noshow"] + "</div>" if "noshow" in charts_html else ""}
+
+<h2>6. Análisis de Tasa de Bloqueo</h2>
+<p>La <strong>Tasa de Bloqueo</strong> mide cupos bloqueados administrativamente (vacaciones, capacitaciones, fallas):
+<code>Bloqueados ÷ Total × 100</code>.
+El centro registra <strong>{v_bloq:.1f}%</strong> ({_sem_text(v_bloq, "bloqueo")}).
+Meta ≤ 10%, alerta > 15%.</p>
+{"<p class='chart-caption'><strong>Gráfico 5.</strong> Evolución mensual de la Tasa de Bloqueo. Detecta meses con mayor pérdida de capacidad instalada.</p><div class='chart-container'>" + charts_html["bloqueo"] + "</div>" if "bloqueo" in charts_html else ""}
+
+<h2>7. Análisis de Efectividad de Cita</h2>
+<p>La <strong>Efectividad de Cita</strong> mide citas completadas exitosamente:
+<code>Completados ÷ Citados × 100</code>.
+El centro alcanza <strong>{v_efec:.1f}%</strong> ({_sem_text(v_efec, "efectividad")}).
+Meta ≥ 88%, alerta < 80%.</p>
+{"<p class='chart-caption'><strong>Gráfico 6.</strong> Evolución mensual de la Efectividad. Proporción de citas que terminaron en atención efectiva.</p><div class='chart-container'>" + charts_html["efectividad"] + "</div>" if "efectividad" in charts_html else ""}
+
+<div class="page-break"></div>
+
+<h2>8. Rendimiento Promedio por Instrumento</h2>
+<p>El <strong>Rendimiento Promedio</strong> indica los minutos promedio por atención:
+<code>Promedio(RENDIMIENTO)</code>.
+El centro presenta <strong>{v_rend:.1f} min/atención</strong>.</p>
+<p class="chart-caption"><strong>Gráfico 7.</strong> Rendimiento por profesional. Permite identificar profesionales con rendimientos atípicos.</p>
+<div class="chart-container">{charts_html.get("rendimiento", "<p>Sin datos</p>")}</div>
+
+<h2>9. Análisis de Cupos Sobrecupo</h2>
+<p>El <strong>Sobrecupo</strong> mide atenciones sobre la capacidad programada:
+<code>Sobrecupos ÷ Total × 100</code>.
+El centro registra <strong>{v_sobre:.1f}%</strong> ({_sem_text(v_sobre, "sobrecupo")}).
+Meta ≤ 5%, alerta > 10%.</p>
+
+<h2>10. Cobertura Sectorial</h2>
+<p>La <strong>Cobertura Sectorial</strong> mide registros con sector territorial informado:
+<code>Con sector ÷ Total × 100</code>.
+Cobertura: <strong>{v_cob:.1f}%</strong> ({_sem_text(v_cob, "cobertura_sectorial")}).
+Meta ≥ 80%, alerta < 60%.</p>
+<p class="chart-caption"><strong>Gráfico 8.</strong> Distribución por sector territorial (Verde, Lila, Rojo, No Informado).</p>
+<div class="chart-container">{charts_html.get("sector", "<p>Sin datos</p>")}</div>
+
+<h2>11. Agendamiento Remoto</h2>
+<p>Mide citas gestionadas por canales no presenciales:
+<code>(Telefónico + Telesalud) ÷ Total × 100</code>.
+Resultado: <strong>{v_ag:.1f}%</strong> ({_sem_text(v_ag, "agendamiento_remoto")}).
+Meta ≥ 20%, alerta < 5%.</p>
+
+<h2>12. Ocupación en Horario Extendido</h2>
+<p>Uso de cupos a partir de las 18:00 hrs (jornada extendida con costo adicional):
+<code>Citados ≥18h ÷ (Citados + Disponibles ≥18h) × 100</code>.
+Resultado: <strong>{v_ext:.1f}%</strong> ({_sem_text(v_ext, "ocupacion_extendida")}).
+Meta ≥ 50%, alerta < 30%.</p>
+
+<div class="page-break"></div>
+
+<h2>13. Distribución por Tipo de Atención</h2>
+<p class="chart-caption"><strong>Gráfico 9.</strong> Volumen de cupos por tipo de atención (Morbilidad, Control, Urgencia, etc.).
+Identifica la composición de la cartera de servicios del centro.</p>
+<div class="chart-container">{charts_html.get("tipo_atencion", "<p>Sin datos</p>")}</div>
+
+{"<p><strong>Tabla 1.</strong> KPIs por tipo de atención.</p><table><tr><th>Tipo Atención</th><th>Total</th><th>Citados</th><th>Disp.</th><th>Bloq.</th><th>Atend.</th><th>Ocupación</th><th>No-Show</th><th>Efectividad</th><th>Rend.(min)</th></tr>" + ta_rows_html + "</table>" if ta_rows_html else ""}
+
+<h2>14. KPIs por Instrumento / Profesional</h2>
+<p><strong>Tabla 2.</strong> Resumen de indicadores por profesional del centro.</p>
+{"<table><tr><th>Instrumento</th><th>Total</th><th>Citados</th><th>Disp.</th><th>Bloq.</th><th>Atend.</th><th>Ocupación</th><th>No-Show</th><th>Efectividad</th><th>Rend.(min)</th></tr>" + inst_rows_html + "</table>" if inst_rows_html else "<p>Sin datos de instrumentos.</p>"}
+
+{"<div class='page-break'></div><h2>15. Evolución Conjunta de KPIs Principales</h2><p class='chart-caption'><strong>Gráfico 10.</strong> Ocupación, No-Show y Bloqueo mes a mes. Visualiza la interacción: un aumento de bloqueo típicamente reduce la ocupación; un No-Show elevado reduce la efectividad.</p><div class='chart-container'>" + charts_html["multi_kpi"] + "</div>" if "multi_kpi" in charts_html else ""}
+
+{"<h2>16. Mapa de Calor: Ocupación por Instrumento y Mes</h2><p class='chart-caption'><strong>Gráfico 11.</strong> Cruza cada instrumento (fila) con cada mes (columna), coloreando según la tasa de ocupación. Tonos verdes ≥ 65%%, amarillos zona intermedia, rojos ocupación crítica.</p><div class='chart-container'>" + charts_html["heatmap"] + "</div>" if "heatmap" in charts_html else ""}
+
+<div class="page-break"></div>
+
+<h2>17. Alertas y Brechas del Centro</h2>
+{alertas_html}
+
+<h2>18. Conclusión del Informe</h2>
+{conclusion_html}
+
+<div class="footer">
+  <p>Informe generado automáticamente por el Sistema de Análisis de Productividad APS<br>
+  Servicio de Salud Metropolitano Central · {centro_sel} · Período: {rango_meses}<br>
+  Fecha de generación: {fecha_gen}</p>
+</div>
+
+</body>
+</html>"""
+
+    return html
+
 
 def _kpis_por_mes_centro(df_centro: pd.DataFrame) -> pd.DataFrame:
     """Calcula KPIs por mes para un centro específico (sin caché, dato ya filtrado)."""

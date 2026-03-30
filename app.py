@@ -947,63 +947,166 @@ def page_analisis(dff: pd.DataFrame):
 
     with sub_tab4:
         if "GRUPO_ETARIO" in dff.columns:
-            col1, col2 = st.columns(2)
+            import plotly.graph_objects as go
+            import plotly.express as px
+            from src.kpis import calc_no_show, calc_efectividad
+
+            dff_cit = dff[dff["ESTADO CUPO"] == "CITADO"]
+            MESES_ES = {1:"Ene",2:"Feb",3:"Mar",4:"Abr",5:"May",6:"Jun",
+                        7:"Jul",8:"Ago",9:"Sep",10:"Oct",11:"Nov",12:"Dic"}
+
+            # ── Sección 1: Distribución · No-Show · Efectividad ───────
+            st.markdown("##### Resumen por Grupo Etario")
+            col1, col2, col3 = st.columns(3)
+
             with col1:
-                ge_counts = dff["GRUPO_ETARIO"].value_counts().sort_index()
-                import plotly.graph_objects as go
+                ge_counts = dff_cit["GRUPO_ETARIO"].value_counts().sort_index()
                 fig_ge = go.Figure(go.Bar(
                     x=ge_counts.index.astype(str),
                     y=ge_counts.values,
                     marker_color="#2E86C1",
                     text=[f"{v:,}" for v in ge_counts.values],
                     textposition="outside",
-                    hovertemplate="<b>%{x}</b><br>%{y:,} registros<extra></extra>",
+                    hovertemplate="<b>%{x}</b><br>%{y:,} citados<extra></extra>",
                 ))
                 fig_ge.update_layout(
-                    title="Distribución por Grupo Etario",
+                    title="Citados por Grupo Etario",
                     template="plotly_white",
-                    height=380,
+                    height=360,
                     xaxis_title="Grupo Etario",
-                    yaxis_title="Registros",
-                    margin=dict(l=40, r=20, t=50, b=40),
+                    yaxis_title="Citados",
+                    margin=dict(l=30, r=20, t=50, b=40),
                 )
-                st.plotly_chart(fig_ge)
+                st.plotly_chart(fig_ge, use_container_width=True)
 
             with col2:
-                # No-Show por grupo etario
-                # (GRUPO_ETARIO es atributo del paciente → solo existe en cupos CITADO;
-                #  calcular ocupación por edad sería siempre 100% porque los cupos
-                #  DISPONIBLE no tienen paciente asignado ni edad)
-                from src.kpis import calc_no_show
                 ge_noshow = (
-                    dff[dff["ESTADO CUPO"] == "CITADO"]
-                    .groupby("GRUPO_ETARIO", observed=True)
+                    dff_cit.groupby("GRUPO_ETARIO", observed=True)
                     .apply(calc_no_show)
                     .reset_index(name="no_show")
                 )
-                colors_ge = [
+                colors_ns = [
                     "#E74C3C" if v > 15 else "#F39C12" if v > 10 else "#27AE60"
                     for v in ge_noshow["no_show"]
                 ]
-                fig_ge2 = go.Figure(go.Bar(
+                fig_ns = go.Figure(go.Bar(
                     x=ge_noshow["GRUPO_ETARIO"].astype(str),
                     y=ge_noshow["no_show"],
-                    marker_color=colors_ge,
+                    marker_color=colors_ns,
                     text=[f"{v:.1f}%" for v in ge_noshow["no_show"]],
                     textposition="outside",
                     hovertemplate="<b>%{x}</b><br>No-Show: %{y:.1f}%<extra></extra>",
                 ))
-                fig_ge2.add_hline(y=10, line_dash="dash", line_color="#E74C3C",
-                                   annotation_text="Umbral 10%")
-                fig_ge2.update_layout(
+                fig_ns.add_hline(y=10, line_dash="dash", line_color="#E74C3C",
+                                  annotation_text="Umbral 10%")
+                fig_ns.update_layout(
                     title="No-Show por Grupo Etario",
                     template="plotly_white",
-                    height=380,
+                    height=360,
                     xaxis_title="Grupo Etario",
                     yaxis_title="No-Show (%)",
-                    margin=dict(l=40, r=20, t=50, b=40),
+                    margin=dict(l=30, r=20, t=50, b=40),
                 )
-                st.plotly_chart(fig_ge2)
+                st.plotly_chart(fig_ns, use_container_width=True)
+
+            with col3:
+                ge_efec = (
+                    dff_cit.groupby("GRUPO_ETARIO", observed=True)
+                    .apply(calc_efectividad)
+                    .reset_index(name="efectividad")
+                )
+                colors_ef = [
+                    "#27AE60" if v >= 88 else "#F39C12" if v >= 80 else "#E74C3C"
+                    for v in ge_efec["efectividad"]
+                ]
+                fig_ef = go.Figure(go.Bar(
+                    x=ge_efec["GRUPO_ETARIO"].astype(str),
+                    y=ge_efec["efectividad"],
+                    marker_color=colors_ef,
+                    text=[f"{v:.1f}%" for v in ge_efec["efectividad"]],
+                    textposition="outside",
+                    hovertemplate="<b>%{x}</b><br>Efectividad: %{y:.1f}%<extra></extra>",
+                ))
+                fig_ef.add_hline(y=88, line_dash="dash", line_color="#27AE60",
+                                  annotation_text="Meta 88%")
+                fig_ef.update_layout(
+                    title="Efectividad por Grupo Etario",
+                    template="plotly_white",
+                    height=360,
+                    xaxis_title="Grupo Etario",
+                    yaxis_title="Efectividad (%)",
+                    yaxis=dict(range=[0, 110]),
+                    margin=dict(l=30, r=20, t=50, b=40),
+                )
+                st.plotly_chart(fig_ef, use_container_width=True)
+
+            # ── Sección 2: Series temporales por grupo etario ─────────
+            st.markdown("##### Evolución Mensual por Grupo Etario")
+            if "MES_NUM" not in dff.columns or dff["MES_NUM"].nunique() < 2:
+                st.info("Se necesitan al menos 2 meses de datos para mostrar series temporales.")
+            else:
+                ge_mes_rows = []
+                for (ge, mes), grp in dff_cit.groupby(["GRUPO_ETARIO", "MES_NUM"], observed=True):
+                    ge_mes_rows.append({
+                        "grupo_etario": ge,
+                        "mes": int(mes),
+                        "mes_label": MESES_ES.get(int(mes), str(mes)),
+                        "no_show": calc_no_show(grp),
+                        "efectividad": calc_efectividad(grp),
+                        "citados": len(grp),
+                    })
+                df_ge_mes = pd.DataFrame(ge_mes_rows).sort_values(["grupo_etario", "mes"])
+
+                ts_col1, ts_col2 = st.columns(2)
+
+                with ts_col1:
+                    fig_ns_ts = px.line(
+                        df_ge_mes,
+                        x="mes_label", y="no_show",
+                        color="grupo_etario",
+                        markers=True,
+                        labels={"mes_label": "Mes", "no_show": "No-Show (%)", "grupo_etario": "Grupo"},
+                        title="No-Show por Mes y Grupo Etario",
+                        template="plotly_white",
+                        height=380,
+                    )
+                    fig_ns_ts.add_hline(y=10, line_dash="dash", line_color="#E74C3C",
+                                        annotation_text="Umbral 10%", annotation_position="top right")
+                    fig_ns_ts.update_layout(margin=dict(l=20, r=20, t=50, b=40),
+                                             legend=dict(font_size=11))
+                    st.plotly_chart(fig_ns_ts, use_container_width=True)
+
+                with ts_col2:
+                    fig_ef_ts = px.line(
+                        df_ge_mes,
+                        x="mes_label", y="efectividad",
+                        color="grupo_etario",
+                        markers=True,
+                        labels={"mes_label": "Mes", "efectividad": "Efectividad (%)", "grupo_etario": "Grupo"},
+                        title="Efectividad por Mes y Grupo Etario",
+                        template="plotly_white",
+                        height=380,
+                    )
+                    fig_ef_ts.add_hline(y=88, line_dash="dash", line_color="#27AE60",
+                                        annotation_text="Meta 88%", annotation_position="bottom right")
+                    fig_ef_ts.update_layout(margin=dict(l=20, r=20, t=50, b=40),
+                                             legend=dict(font_size=11))
+                    st.plotly_chart(fig_ef_ts, use_container_width=True)
+
+                # Volumen de citados por mes (stacked bars para ver predominancia)
+                fig_vol_ts = px.bar(
+                    df_ge_mes,
+                    x="mes_label", y="citados",
+                    color="grupo_etario",
+                    barmode="stack",
+                    labels={"mes_label": "Mes", "citados": "Citados", "grupo_etario": "Grupo Etario"},
+                    title="Volumen de Citados por Mes y Grupo Etario",
+                    template="plotly_white",
+                    height=360,
+                )
+                fig_vol_ts.update_layout(margin=dict(l=20, r=20, t=50, b=40),
+                                          legend=dict(font_size=11))
+                st.plotly_chart(fig_vol_ts, use_container_width=True)
         else:
             st.info("Columna de grupo etario no disponible en los datos cargados.")
 

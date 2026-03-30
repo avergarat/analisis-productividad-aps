@@ -60,10 +60,10 @@ from src.kpis import (
     kpis_instrumento_mes
 )
 from src.charts import (
-    chart_ranking_centros, chart_evolucion_mensual, chart_heatmap_instrumento_mes,
+    chart_ranking_centros, chart_evolucion_mensual,
     chart_tipo_atencion, chart_sector, chart_noshow_vs_umbral,
     chart_rendimiento_instrumento, chart_estado_cupos, chart_multi_kpi,
-    build_semaforo_table
+    build_semaforo_table, chart_heatmap_pivot
 )
 from src.demo_data import generate_demo_data, get_demo_metadata
 from src.storage import save_data, load_data, delete_data, github_configured, storage_status
@@ -1052,8 +1052,118 @@ def page_analisis(dff: pd.DataFrame):
                         st.caption(f"ℹ️ Series temporales muestran los 8 tipos con mayor volumen. La tabla de KPIs incluye todos los {len(tipos_sel)} tipos seleccionados.")
 
     with sub_tab3:
-        fig_heat = chart_heatmap_instrumento_mes(dff)
-        st.plotly_chart(fig_heat)
+        from src.kpis import calc_ocupacion, calc_no_show, calc_efectividad, calc_bloqueo
+
+        MESES_ES = {1:"Ene",2:"Feb",3:"Mar",4:"Abr",5:"May",6:"Jun",
+                    7:"Jul",8:"Ago",9:"Sep",10:"Oct",11:"Nov",12:"Dic"}
+
+        # Configuración de cada métrica disponible
+        METRICAS_HEATMAP = {
+            "Ocupación (%)": {
+                "fn": calc_ocupacion, "col": "INSTRUMENTO",
+                "colorscale": [[0.0,"#E74C3C"],[0.5,"#F39C12"],[0.65,"#27AE60"],[1.0,"#0B5345"]],
+                "zmin": 0, "zmax": 100, "suffix": "%",
+                "mejor": "mayor",
+            },
+            "No-Show (%)": {
+                "fn": calc_no_show, "col": "INSTRUMENTO",
+                "colorscale": [[0.0,"#27AE60"],[0.1,"#F39C12"],[0.15,"#E74C3C"],[1.0,"#7B241C"]],
+                "zmin": 0, "zmax": 40, "suffix": "%",
+                "mejor": "menor",
+            },
+            "Efectividad (%)": {
+                "fn": calc_efectividad, "col": "INSTRUMENTO",
+                "colorscale": [[0.0,"#E74C3C"],[0.8,"#F39C12"],[0.88,"#27AE60"],[1.0,"#0B5345"]],
+                "zmin": 0, "zmax": 100, "suffix": "%",
+                "mejor": "mayor",
+            },
+            "Bloqueo (%)": {
+                "fn": calc_bloqueo, "col": "INSTRUMENTO",
+                "colorscale": [[0.0,"#27AE60"],[0.1,"#F39C12"],[0.15,"#E74C3C"],[1.0,"#7B241C"]],
+                "zmin": 0, "zmax": 40, "suffix": "%",
+                "mejor": "menor",
+            },
+        }
+
+        # ── Selector de métrica ───────────────────────────────────────
+        metrica_sel = st.radio(
+            "Métrica a visualizar",
+            list(METRICAS_HEATMAP.keys()),
+            horizontal=True,
+            key="heatmap_metrica",
+        )
+        cfg = METRICAS_HEATMAP[metrica_sel]
+
+        def _build_pivot(df_src, group_col, fn, meses_map):
+            pivot_data = {}
+            for (ent, mes), grp in df_src.groupby([group_col, "MES_NUM"]):
+                if ent not in pivot_data:
+                    pivot_data[ent] = {}
+                pivot_data[ent][meses_map.get(int(mes), str(mes))] = fn(grp)
+            if not pivot_data:
+                return pd.DataFrame()
+            col_order = [meses_map[m] for m in sorted(meses_map) if meses_map[m] in
+                         list(pd.DataFrame(pivot_data).T.columns)]
+            df_p = pd.DataFrame(pivot_data).T.fillna(0)
+            df_p = df_p[[c for c in col_order if c in df_p.columns]]
+            df_p["_media"] = df_p.mean(axis=1)
+            asc = cfg["mejor"] == "menor"
+            df_p = df_p.sort_values("_media", ascending=asc).drop(columns=["_media"])
+            return df_p
+
+        # ── Heatmap 1: Instrumento × Mes ─────────────────────────────
+        st.markdown(f"##### {metrica_sel} — Instrumento × Mes")
+        if "INSTRUMENTO" in dff.columns and "MES_NUM" in dff.columns:
+            df_piv_inst = _build_pivot(dff, "INSTRUMENTO", cfg["fn"], MESES_ES)
+            if not df_piv_inst.empty:
+                fig_h1 = chart_heatmap_pivot(
+                    df_piv_inst,
+                    title=f"{metrica_sel} por Instrumento y Mes",
+                    metric_label=metrica_sel,
+                    colorscale=cfg["colorscale"],
+                    zmin=cfg["zmin"], zmax=cfg["zmax"], suffix=cfg["suffix"],
+                )
+                st.plotly_chart(fig_h1, use_container_width=True)
+        else:
+            st.info("Sin datos suficientes para el mapa de calor por instrumento.")
+
+        # ── Heatmap 2: Tipo Atención × Mes ───────────────────────────
+        if "TIPO ATENCION" in dff.columns and "MES_NUM" in dff.columns:
+            st.markdown(f"##### {metrica_sel} — Tipo de Atención × Mes")
+            # Filtrar top 15 tipos por volumen para mantener legibilidad
+            top15_ta = dff["TIPO ATENCION"].value_counts().head(15).index.tolist()
+            dff_ta15 = dff[dff["TIPO ATENCION"].isin(top15_ta)]
+            df_piv_ta = _build_pivot(dff_ta15, "TIPO ATENCION", cfg["fn"], MESES_ES)
+            if not df_piv_ta.empty:
+                fig_h2 = chart_heatmap_pivot(
+                    df_piv_ta,
+                    title=f"{metrica_sel} por Tipo de Atención y Mes (Top 15)",
+                    metric_label=metrica_sel,
+                    colorscale=cfg["colorscale"],
+                    zmin=cfg["zmin"], zmax=cfg["zmax"], suffix=cfg["suffix"],
+                )
+                st.plotly_chart(fig_h2, use_container_width=True)
+
+        # ── Tabla de extremos críticos ────────────────────────────────
+        st.markdown(f"##### Combinaciones críticas — {metrica_sel}")
+        if "INSTRUMENTO" in dff.columns and "MES_NUM" in dff.columns:
+            rows_ext = []
+            for (inst, mes), grp in dff.groupby(["INSTRUMENTO", "MES_NUM"]):
+                rows_ext.append({
+                    "Instrumento": inst,
+                    "Mes": MESES_ES.get(int(mes), str(mes)),
+                    "Valor": cfg["fn"](grp),
+                    "Registros": len(grp),
+                })
+            df_ext = pd.DataFrame(rows_ext)
+            if not df_ext.empty:
+                asc_sort = cfg["mejor"] == "menor"
+                df_ext = df_ext.sort_values("Valor", ascending=asc_sort).head(10)
+                df_ext["Valor"] = df_ext["Valor"].apply(lambda v: f"{v:.1f}{cfg['suffix']}")
+                df_ext["Registros"] = df_ext["Registros"].apply(lambda v: f"{v:,}")
+                lbl = "peores" if cfg["mejor"] == "mayor" else "más altos"
+                st.caption(f"Top 10 combinaciones instrumento/mes con {lbl} resultado")
+                st.dataframe(df_ext, use_container_width=True, hide_index=True)
 
     with sub_tab4:
         if "GRUPO_ETARIO" in dff.columns:

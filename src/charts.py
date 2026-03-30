@@ -164,6 +164,37 @@ def chart_evolucion_mensual(df_meses: pd.DataFrame, kpi_col: str,
 
 
 # ──────────────────────────────────────────────
+# 4-bis. Mapa de calor genérico (pivot precalculado)
+# ──────────────────────────────────────────────
+def chart_heatmap_pivot(
+    df_pivot: pd.DataFrame,
+    title: str,
+    metric_label: str,
+    colorscale: list,
+    zmin: float = 0,
+    zmax: float = 100,
+    suffix: str = "%",
+) -> go.Figure:
+    """
+    Renderiza un heatmap a partir de un pivot DataFrame (filas=entidad, columnas=mes).
+    """
+    y_labels = [str(i)[:32] for i in df_pivot.index]
+    fig = go.Figure(go.Heatmap(
+        z=df_pivot.values,
+        x=list(df_pivot.columns),
+        y=y_labels,
+        colorscale=colorscale,
+        zmin=zmin, zmax=zmax,
+        colorbar=dict(title=metric_label, ticksuffix=suffix),
+        hovertemplate=f"<b>%{{y}}</b><br>Mes: %{{x}}<br>{metric_label}: %{{z:.1f}}{suffix}<extra></extra>",
+    ))
+    fig.update_layout(
+        **_base_layout(title, height=max(350, len(df_pivot) * 35 + 100)),
+        xaxis=dict(title="Mes"),
+    )
+    return fig
+
+
 # 4. Mapa de calor: Instrumento × Mes
 # ──────────────────────────────────────────────
 def chart_heatmap_instrumento_mes(df: pd.DataFrame) -> go.Figure:

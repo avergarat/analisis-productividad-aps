@@ -376,6 +376,13 @@ def page_inicio():
                             })
                         _save_session()
                         st.success(f"✅ {n_archivos} archivo(s) procesados · **{n_nuevos:,}** nuevos registros · **{len(df_final):,}** registros acumulados en total")
+                        if len(df_final) > 800_000:
+                            st.warning(
+                                f"⚠️ Dataset muy grande ({len(df_final):,} filas). "
+                                "Para evitar errores de memoria, use el botón **🗑️ Limpiar datos** "
+                                "y recargue solo los archivos necesarios.",
+                                icon="⚠️"
+                            )
                         if github_configured():
                             st.info("💾 Datos guardados en GitHub — cualquier usuario verá estos datos al abrir la app.", icon="✅")
                         else:

@@ -214,12 +214,27 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
 
 
 def consolidate_files(list_of_dfs: list) -> pd.DataFrame:
-    """Consolida múltiples DataFrames IRIS eliminando duplicados."""
+    """
+    Consolida múltiples DataFrames IRIS.
+    No aplica drop_duplicates() global para evitar picos de memoria con
+    archivos grandes. Los duplicados entre archivos distintos de CESFAM son
+    prácticamente imposibles (distinto ESTABLECIMIENTO). El deduplicado se
+    hace solo sobre la columna _archivo para evitar re-cargar el mismo archivo.
+    """
     if not list_of_dfs:
         return pd.DataFrame()
+    import gc
     df_all = pd.concat(list_of_dfs, ignore_index=True)
-    # Eliminar duplicados exactos
-    df_all = df_all.drop_duplicates()
+    gc.collect()
+    # Deduplicar solo si se mezclaron DataFrames con el mismo archivo fuente
+    if "_archivo" in df_all.columns:
+        archivos = df_all["_archivo"].unique()
+        if len(archivos) < len(list_of_dfs):
+            # Hay archivos repetidos → deduplicar por archivo+fila usando subset ligero
+            key_cols = [c for c in ["_archivo", "ESTABLECIMIENTO", "FECHA", "INSTRUMENTO",
+                                     "TIPO CUPO", "ESTADO CUPO"] if c in df_all.columns]
+            df_all = df_all.drop_duplicates(subset=key_cols)
+            gc.collect()
     return df_all
 
 

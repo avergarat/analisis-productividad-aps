@@ -88,6 +88,16 @@ def save_data(df: pd.DataFrame, registro_cargas: list | None = None) -> tuple[bo
     if not github_configured():
         return False, "GitHub no configurado (falta token/repo en secrets). Datos solo en caché local."
 
+    # Límite de seguridad: no intentar subir DataFrames > 500k filas a GitHub
+    # (evita OOM al serializar base64 en memoria en Streamlit Cloud)
+    _MAX_ROWS_GITHUB = 500_000
+    if len(df) > _MAX_ROWS_GITHUB:
+        return False, (
+            f"Dataset muy grande ({len(df):,} filas). "
+            f"GitHub solo guarda hasta {_MAX_ROWS_GITHUB:,} filas. "
+            "Datos disponibles en caché local de esta sesión."
+        )
+
     cfg = _cfg()
     headers = _gh_headers(cfg)
     url = f"https://api.github.com/repos/{cfg['repo']}/contents/{cfg['path']}"

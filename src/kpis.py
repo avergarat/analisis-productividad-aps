@@ -319,8 +319,8 @@ def kpis_por_instrumento(df: pd.DataFrame) -> pd.DataFrame:
         row["total"]       = len(grp)
         row["citados"]     = int((grp["ESTADO CUPO"] == "CITADO").sum())
         row["disponibles"] = int((grp["ESTADO CUPO"] == "DISPONIBLE").sum())
-        row["bloqueados"]  = int((grp["TIPO CUPO"] == "BLOQUEADO").sum()) if "TIPO CUPO" in grp.columns else 0
-        row["atendidos"]   = int((grp["ESTADO CITA"] == "ATENDIDO").sum()) if "ESTADO CITA" in grp.columns else 0
+        row["bloqueados"]  = int((grp["ESTADO CUPO"] == "BLOQUEADO").sum())
+        row["completados"] = int((grp["ESTADO CITA"] == "Completado").sum()) if "ESTADO CITA" in grp.columns else 0
         row["ocupacion"]   = calc_ocupacion(grp)
         row["no_show"]     = calc_no_show(grp)
         row["efectividad"] = calc_efectividad(grp)
@@ -342,8 +342,8 @@ def kpis_por_centro(df: pd.DataFrame) -> pd.DataFrame:
         row["total"]       = len(grp)
         row["citados"]     = int((grp["ESTADO CUPO"] == "CITADO").sum())
         row["disponibles"] = int((grp["ESTADO CUPO"] == "DISPONIBLE").sum())
-        row["bloqueados"]  = int((grp["TIPO CUPO"] == "BLOQUEADO").sum()) if "TIPO CUPO" in grp.columns else 0
-        row["atendidos"]   = int((grp["ESTADO CITA"] == "ATENDIDO").sum()) if "ESTADO CITA" in grp.columns else 0
+        row["bloqueados"]  = int((grp["ESTADO CUPO"] == "BLOQUEADO").sum())
+        row["completados"] = int((grp["ESTADO CITA"] == "Completado").sum()) if "ESTADO CITA" in grp.columns else 0
         row["ocupacion"]   = calc_ocupacion(grp)
         row["no_show"]     = calc_no_show(grp)
         row["bloqueo"]     = calc_bloqueo(grp)
@@ -409,8 +409,8 @@ def kpis_por_tipo_atencion(df: pd.DataFrame) -> pd.DataFrame:
         row["total"]       = len(grp)
         row["citados"]     = int((grp["ESTADO CUPO"] == "CITADO").sum())
         row["disponibles"] = int((grp["ESTADO CUPO"] == "DISPONIBLE").sum())
-        row["bloqueados"]  = int((grp["TIPO CUPO"] == "BLOQUEADO").sum()) if "TIPO CUPO" in grp.columns else 0
-        row["atendidos"]   = int((grp["ESTADO CITA"] == "ATENDIDO").sum()) if "ESTADO CITA" in grp.columns else 0
+        row["bloqueados"]  = int((grp["ESTADO CUPO"] == "BLOQUEADO").sum())
+        row["completados"] = int((grp["ESTADO CITA"] == "Completado").sum()) if "ESTADO CITA" in grp.columns else 0
         rows.append(row)
 
     return pd.DataFrame(rows).sort_values("total", ascending=False)

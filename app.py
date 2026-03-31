@@ -954,9 +954,9 @@ def page_analisis(dff: pd.DataFrame):
                 df_disp["Citados"]        = df_disp["citados"].apply(lambda v: f"{v:,}")
                 df_disp["Disponibles"]    = df_disp["disponibles"].apply(lambda v: f"{v:,}")
                 df_disp["Bloqueados"]     = df_disp["bloqueados"].apply(lambda v: f"{v:,}")
-                df_disp["Atendidos"]      = df_disp["atendidos"].apply(lambda v: f"{v:,}")
+                df_disp["Completados"]    = df_disp["completados"].apply(lambda v: f"{v:,}")
                 st.dataframe(
-                    df_disp[["instrumento","Total","Citados","Disponibles","Bloqueados","Atendidos","Ocupación","No-Show","Efectividad","Rendim. (min)"]].rename(columns={"instrumento":"Instrumento"}),
+                    df_disp[["instrumento","Total","Citados","Disponibles","Bloqueados","Completados","Ocupación","No-Show","Efectividad","Rendim. (min)"]].rename(columns={"instrumento":"Instrumento"}),
                     width="stretch", hide_index=True
                 )
 
@@ -1127,10 +1127,10 @@ def page_analisis(dff: pd.DataFrame):
                 df_kpis_disp["Citados"] = df_kpis_disp["citados"].apply(lambda v: f"{v:,}")
                 df_kpis_disp["Disponibles"] = df_kpis_disp["disponibles"].apply(lambda v: f"{v:,}")
                 df_kpis_disp["Bloqueados"]  = df_kpis_disp["bloqueados"].apply(lambda v: f"{v:,}")
-                df_kpis_disp["Atendidos"]   = df_kpis_disp["atendidos"].apply(lambda v: f"{v:,}") if "atendidos" in df_kpis_disp.columns else "—"
+                df_kpis_disp["Completados"] = df_kpis_disp["completados"].apply(lambda v: f"{v:,}") if "completados" in df_kpis_disp.columns else "—"
 
                 cols_show = [
-                    "tipo_atencion", "Total", "Citados", "Disponibles", "Bloqueados", "Atendidos",
+                    "tipo_atencion", "Total", "Citados", "Disponibles", "Bloqueados", "Completados",
                     "Ocupación", "No-Show", "Efectividad", "Bloqueo",
                     "Sobrecupo", "Ag. Remoto", "Rendim. (min)"
                 ]
@@ -1777,7 +1777,7 @@ def page_alertas(dff: pd.DataFrame):
             "citados": "Citados",
             "disponibles": "Disponibles",
             "bloqueados": "Bloqueados",
-            "atendidos": "Atendidos",
+            "completados": "Completados",
             "ocupacion": "Ocupación %",
             "no_show": "No-Show %",
             "bloqueo": "Bloqueo %",
@@ -1801,7 +1801,7 @@ def page_alertas(dff: pd.DataFrame):
             "Bloqueo %": "{:.1f}", "Efectividad %": "{:.1f}",
             "Rendimiento (min)": "{:.1f}",
             "Total Registros": "{:,.0f}", "Citados": "{:,.0f}",
-            "Disponibles": "{:,.0f}", "Bloqueados": "{:,.0f}", "Atendidos": "{:,.0f}",
+            "Disponibles": "{:,.0f}", "Bloqueados": "{:,.0f}", "Completados": "{:,.0f}",
         }
         fmt_valido = {k: v for k, v in fmt.items() if k in df_c_display.columns}
         styled_c = df_c_display.style.map(color_ocupacion, subset=["Ocupación %"]).format(fmt_valido)
@@ -1856,8 +1856,8 @@ def page_informe_centro(dff: pd.DataFrame):
     total_registros = len(df_centro)
     citados = int((df_centro["ESTADO CUPO"] == "CITADO").sum())
     disponibles = int((df_centro["ESTADO CUPO"] == "DISPONIBLE").sum())
-    bloqueados = int((df_centro["TIPO CUPO"] == "BLOQUEADO").sum()) if "TIPO CUPO" in df_centro.columns else 0
-    atendidos = int((df_centro["ESTADO CITA"] == "ATENDIDO").sum()) if "ESTADO CITA" in df_centro.columns else 0
+    bloqueados = int((df_centro["ESTADO CUPO"] == "BLOQUEADO").sum())
+    completados = int((df_centro["ESTADO CITA"] == "Completado").sum()) if "ESTADO CITA" in df_centro.columns else 0
 
     n_meses = df_centro["MES_NUM"].nunique() if "MES_NUM" in df_centro.columns else 0
     rango_meses = ""
@@ -1880,8 +1880,8 @@ def page_informe_centro(dff: pd.DataFrame):
         f"durante el período **{rango_meses}** ({n_meses} meses), "
         f"abarcando un total de **{total_registros:,}** registros de cupos programados en el sistema IRIS. "
         f"De estos, **{citados:,}** corresponden a cupos citados, **{disponibles:,}** permanecieron disponibles "
-        f"(sin asignar), **{bloqueados:,}** fueron bloqueados administrativamente y **{atendidos:,}** "
-        f"registraron atención efectiva."
+        f"(sin asignar), **{bloqueados:,}** fueron bloqueados administrativamente y **{completados:,}** "
+        f"registraron cita completada."
     )
 
     # Tarjetas resumen
@@ -1890,7 +1890,7 @@ def page_informe_centro(dff: pd.DataFrame):
     c2.metric("Citados", f"{citados:,}")
     c3.metric("Disponibles", f"{disponibles:,}")
     c4.metric("Bloqueados", f"{bloqueados:,}")
-    c5.metric("Atendidos", f"{atendidos:,}")
+    c5.metric("Completados", f"{completados:,}")
 
     # ══════════════════════════════════════════════════════════════════════════
     # SECCIÓN 2: SEMÁFORO DE INDICADORES
@@ -2232,7 +2232,7 @@ def page_informe_centro(dff: pd.DataFrame):
     if not df_kpis_ta.empty:
         st.markdown(
             "**Tabla 1.** KPIs desglosados por tipo de atención. Cada fila muestra "
-            "el total de registros, citados, disponibles, bloqueados, atendidos y las "
+            "el total de registros, citados, disponibles, bloqueados, completados y las "
             "tasas de ocupación, no-show, bloqueo, efectividad, sobrecupo, agendamiento "
             "remoto y rendimiento para cada tipo de atención del centro."
         )
@@ -2246,8 +2246,8 @@ def page_informe_centro(dff: pd.DataFrame):
         df_ta_disp["Citados"] = df_ta_disp["citados"].apply(lambda v: f"{v:,}")
         df_ta_disp["Disponibles"] = df_ta_disp["disponibles"].apply(lambda v: f"{v:,}")
         df_ta_disp["Bloqueados"] = df_ta_disp["bloqueados"].apply(lambda v: f"{v:,}")
-        df_ta_disp["Atendidos"] = df_ta_disp["atendidos"].apply(lambda v: f"{v:,}")
-        cols_show = ["tipo_atencion","Total","Citados","Disponibles","Bloqueados","Atendidos",
+        df_ta_disp["Completados"] = df_ta_disp["completados"].apply(lambda v: f"{v:,}")
+        cols_show = ["tipo_atencion","Total","Citados","Disponibles","Bloqueados","Completados",
                      "Ocupación","No-Show","Efectividad","Rendim. (min)"]
         st.dataframe(
             df_ta_disp[cols_show].rename(columns={"tipo_atencion": "Tipo de Atención"}),
@@ -2261,7 +2261,7 @@ def page_informe_centro(dff: pd.DataFrame):
     st.markdown("## 14. KPIs por Instrumento / Profesional")
     st.markdown(
         "**Tabla 2.** Resumen de indicadores por instrumento (profesional) del centro. "
-        "Incluye el volumen total, citados, disponibles, bloqueados, atendidos y las "
+        "Incluye el volumen total, citados, disponibles, bloqueados, completados y las "
         "tasas de ocupación, no-show, efectividad y rendimiento. Permite identificar "
         "profesionales con mayor o menor aprovechamiento de agenda."
     )
@@ -2277,8 +2277,8 @@ def page_informe_centro(dff: pd.DataFrame):
         df_id["Citados"] = df_id["citados"].apply(lambda v: f"{v:,}")
         df_id["Disponibles"] = df_id["disponibles"].apply(lambda v: f"{v:,}")
         df_id["Bloqueados"] = df_id["bloqueados"].apply(lambda v: f"{v:,}")
-        df_id["Atendidos"] = df_id["atendidos"].apply(lambda v: f"{v:,}")
-        cols_i = ["instrumento","Total","Citados","Disponibles","Bloqueados","Atendidos",
+        df_id["Completados"] = df_id["completados"].apply(lambda v: f"{v:,}")
+        cols_i = ["instrumento","Total","Citados","Disponibles","Bloqueados","Completados",
                   "Ocupación","No-Show","Efectividad","Rendim. (min)"]
         st.dataframe(
             df_id[cols_i].rename(columns={"instrumento": "Instrumento"}),
@@ -2405,7 +2405,7 @@ def page_informe_centro(dff: pd.DataFrame):
         citados=citados,
         disponibles=disponibles,
         bloqueados=bloqueados,
-        atendidos=atendidos,
+        completados=completados,
         kpis=kpis,
         df_centro=df_centro,
         df_inst_c=df_inst_c,
@@ -2450,7 +2450,7 @@ def page_informe_centro(dff: pd.DataFrame):
 
 def _generar_html_informe(
     centro_sel, rango_meses, n_meses, total_registros,
-    citados, disponibles, bloqueados, atendidos,
+    citados, disponibles, bloqueados, completados,
     kpis, df_centro, df_inst_c, df_kpis_ta,
     alertas_centro, n_verde, n_amarillo, n_rojo,
 ) -> str:
@@ -2587,7 +2587,7 @@ def _generar_html_informe(
         for _, r in df_inst_c.iterrows():
             inst_rows_html += (
                 f'<tr><td>{r["instrumento"]}</td><td>{r["total"]:,}</td><td>{r["citados"]:,}</td>'
-                f'<td>{r["disponibles"]:,}</td><td>{r["bloqueados"]:,}</td><td>{r["atendidos"]:,}</td>'
+                f'<td>{r["disponibles"]:,}</td><td>{r["bloqueados"]:,}</td><td>{r["completados"]:,}</td>'
                 f'<td>{_sem_icon(r["ocupacion"],"ocupacion")} {r["ocupacion"]:.1f}%</td>'
                 f'<td>{_sem_icon(r["no_show"],"no_show")} {r["no_show"]:.1f}%</td>'
                 f'<td>{_sem_icon(r["efectividad"],"efectividad")} {r["efectividad"]:.1f}%</td>'
@@ -2600,7 +2600,7 @@ def _generar_html_informe(
         for _, r in df_kpis_ta.iterrows():
             ta_rows_html += (
                 f'<tr><td>{r["tipo_atencion"]}</td><td>{r["total"]:,}</td><td>{r["citados"]:,}</td>'
-                f'<td>{r["disponibles"]:,}</td><td>{r["bloqueados"]:,}</td><td>{r["atendidos"]:,}</td>'
+                f'<td>{r["disponibles"]:,}</td><td>{r["bloqueados"]:,}</td><td>{r["completados"]:,}</td>'
                 f'<td>{_sem_icon(r["ocupacion"],"ocupacion")} {r["ocupacion"]:.1f}%</td>'
                 f'<td>{_sem_icon(r["no_show"],"no_show")} {r["no_show"]:.1f}%</td>'
                 f'<td>{_sem_icon(r["efectividad"],"efectividad")} {r["efectividad"]:.1f}%</td>'
@@ -2694,14 +2694,14 @@ durante el período <strong>{rango_meses}</strong> ({n_meses} meses),
 abarcando un total de <strong>{total_registros:,}</strong> registros de cupos programados en IRIS.
 De estos, <strong>{citados:,}</strong> corresponden a cupos citados, <strong>{disponibles:,}</strong>
 permanecieron disponibles, <strong>{bloqueados:,}</strong> fueron bloqueados administrativamente y
-<strong>{atendidos:,}</strong> registraron atención efectiva.</p>
+<strong>{completados:,}</strong> registraron cita completada.</p>
 
 <div class="cards">
   <div class="card"><div class="val">{total_registros:,}</div><div class="lbl">Total Registros</div></div>
   <div class="card"><div class="val">{citados:,}</div><div class="lbl">Citados</div></div>
   <div class="card"><div class="val">{disponibles:,}</div><div class="lbl">Disponibles</div></div>
   <div class="card"><div class="val">{bloqueados:,}</div><div class="lbl">Bloqueados</div></div>
-  <div class="card"><div class="val">{atendidos:,}</div><div class="lbl">Atendidos</div></div>
+  <div class="card"><div class="val">{completados:,}</div><div class="lbl">Completados</div></div>
 </div>
 
 <h2>2. Semáforo de Indicadores</h2>
@@ -2793,11 +2793,11 @@ Meta ≥ 50%, alerta < 30%.</p>
 Identifica la composición de la cartera de servicios del centro.</p>
 <div class="chart-container">{charts_html.get("tipo_atencion", "<p>Sin datos</p>")}</div>
 
-{"<p><strong>Tabla 1.</strong> KPIs por tipo de atención.</p><table><tr><th>Tipo Atención</th><th>Total</th><th>Citados</th><th>Disp.</th><th>Bloq.</th><th>Atend.</th><th>Ocupación</th><th>No-Show</th><th>Efectividad</th><th>Rend.(min)</th></tr>" + ta_rows_html + "</table>" if ta_rows_html else ""}
+{"<p><strong>Tabla 1.</strong> KPIs por tipo de atención.</p><table><tr><th>Tipo Atención</th><th>Total</th><th>Citados</th><th>Disp.</th><th>Bloq.</th><th>Complet.</th><th>Ocupación</th><th>No-Show</th><th>Efectividad</th><th>Rend.(min)</th></tr>" + ta_rows_html + "</table>" if ta_rows_html else ""}
 
 <h2>14. KPIs por Instrumento / Profesional</h2>
 <p><strong>Tabla 2.</strong> Resumen de indicadores por profesional del centro.</p>
-{"<table><tr><th>Instrumento</th><th>Total</th><th>Citados</th><th>Disp.</th><th>Bloq.</th><th>Atend.</th><th>Ocupación</th><th>No-Show</th><th>Efectividad</th><th>Rend.(min)</th></tr>" + inst_rows_html + "</table>" if inst_rows_html else "<p>Sin datos de instrumentos.</p>"}
+{"<table><tr><th>Instrumento</th><th>Total</th><th>Citados</th><th>Disp.</th><th>Bloq.</th><th>Complet.</th><th>Ocupación</th><th>No-Show</th><th>Efectividad</th><th>Rend.(min)</th></tr>" + inst_rows_html + "</table>" if inst_rows_html else "<p>Sin datos de instrumentos.</p>"}
 
 {"<div class='page-break'></div><h2>15. Evolución Conjunta de KPIs Principales</h2><p class='chart-caption'><strong>Gráfico 10.</strong> Ocupación, No-Show y Bloqueo mes a mes. Visualiza la interacción: un aumento de bloqueo típicamente reduce la ocupación; un No-Show elevado reduce la efectividad.</p><div class='chart-container'>" + charts_html["multi_kpi"] + "</div>" if "multi_kpi" in charts_html else ""}
 
@@ -2829,7 +2829,7 @@ Identifica la composición de la cartera de servicios del centro.</p>
 
 def _generar_pdf_informe(
     centro_sel, rango_meses, n_meses, total_registros,
-    citados, disponibles, bloqueados, atendidos,
+    citados, disponibles, bloqueados, completados,
     kpis, df_centro, df_inst_c, df_kpis_ta,
     alertas_centro, n_verde, n_amarillo, n_rojo,
 ) -> bytes:
@@ -2948,11 +2948,11 @@ def _generar_pdf_informe(
                 x = x_start + i * (card_w + gap)
                 # Sombra
                 self.set_fill_color(220, 220, 220)
-                self.rounded_rect(x + 0.5, y_start + 0.5, card_w, 22, 2, style="F")
+                self.rect(x + 0.5, y_start + 0.5, card_w, 22, style="F")
                 # Tarjeta
                 self.set_fill_color(*BLANCO)
                 self.set_draw_color(*AZUL_CLARO)
-                self.rounded_rect(x, y_start, card_w, 22, 2, style="FD")
+                self.rect(x, y_start, card_w, 22, style="FD")
                 # Barra superior
                 self.set_fill_color(*AZUL_MEDIO)
                 self.rect(x, y_start, card_w, 3, "F")
@@ -3009,7 +3009,7 @@ def _generar_pdf_informe(
 
     # Ícono/badge superior
     pdf.set_fill_color(255, 255, 255)
-    pdf.rounded_rect(80, 30, 50, 18, 3, style="F")
+    pdf.rect(80, 30, 50, 18, style="F")
     pdf.set_font("Helvetica", "B", 9)
     pdf.set_text_color(*AZUL_OSCURO)
     pdf.set_xy(80, 33)
@@ -3052,7 +3052,7 @@ def _generar_pdf_informe(
         (f"{citados:,}", "Citados"),
         (f"{disponibles:,}", "Disponibles"),
         (f"{bloqueados:,}", "Bloqueados"),
-        (f"{atendidos:,}", "Atendidos"),
+        (f"{completados:,}", "Completados"),
     ]
     card_w = 30
     gap = 4
@@ -3063,7 +3063,7 @@ def _generar_pdf_informe(
         x = x_start + i * (card_w + gap)
         # Fondo tarjeta con opacidad simulada
         pdf.set_fill_color(255, 255, 255)
-        pdf.rounded_rect(x, y_cards, card_w, 25, 2, style="F")
+        pdf.rect(x, y_cards, card_w, 25, style="F")
         pdf.set_font("Helvetica", "B", 10)
         pdf.set_text_color(*AZUL_OSCURO)
         pdf.set_xy(x, y_cards + 3)
@@ -3093,7 +3093,7 @@ def _generar_pdf_informe(
     for i, (count, label, color) in enumerate(sem_items):
         x = x_s + i * (box_w + gap_s)
         pdf.set_fill_color(*color)
-        pdf.rounded_rect(x, y_sem + 12, box_w, 20, 3, style="F")
+        pdf.rect(x, y_sem + 12, box_w, 20, style="F")
         pdf.set_font("Helvetica", "B", 16)
         pdf.set_text_color(*BLANCO)
         pdf.set_xy(x, y_sem + 13)
@@ -3220,7 +3220,7 @@ def _generar_pdf_informe(
         f"durante el periodo {rango_meses} ({n_meses} meses), abarcando un total de "
         f"{total_registros:,} registros de cupos programados en IRIS. De estos, "
         f"{citados:,} corresponden a cupos citados, {disponibles:,} permanecieron disponibles, "
-        f"{bloqueados:,} fueron bloqueados administrativamente y {atendidos:,} registraron atencion efectiva."
+        f"{bloqueados:,} fueron bloqueados administrativamente y {completados:,} registraron cita completada."
     )
 
     pdf.kpi_card_row([
@@ -3228,7 +3228,7 @@ def _generar_pdf_informe(
         (f"{citados:,}", "Citados"),
         (f"{disponibles:,}", "Disponibles"),
         (f"{bloqueados:,}", "Bloqueados"),
-        (f"{atendidos:,}", "Atendidos"),
+        (f"{completados:,}", "Completados"),
     ])
 
     # ── Sección 2: Semáforo de Indicadores ────────────────────────────────────
@@ -3391,12 +3391,12 @@ def _generar_pdf_informe(
         pdf.set_text_color(*AZUL_OSCURO)
         pdf.cell(0, 7, "Tabla: KPIs por Tipo de Atencion")
         pdf.ln(8)
-        ta_headers = ["Tipo Atencion", "Total", "Citados", "Disp.", "Bloq.", "Atend.", "Ocup.%", "NoShow%", "Efect.%", "Rend."]
+        ta_headers = ["Tipo Atencion", "Total", "Citados", "Disp.", "Bloq.", "Complet.", "Ocup.%", "NoShow%", "Efect.%", "Rend."]
         ta_rows = []
         for _, r in df_kpis_ta.iterrows():
             ta_rows.append([
                 str(r["tipo_atencion"])[:25], f'{r["total"]:,.0f}', f'{r["citados"]:,.0f}',
-                f'{r["disponibles"]:,.0f}', f'{r["bloqueados"]:,.0f}', f'{r["atendidos"]:,.0f}',
+                f'{r["disponibles"]:,.0f}', f'{r["bloqueados"]:,.0f}', f'{r["completados"]:,.0f}',
                 f'{r["ocupacion"]:.1f}', f'{r["no_show"]:.1f}', f'{r["efectividad"]:.1f}',
                 f'{r["rendimiento"]:.1f}',
             ])
@@ -3410,12 +3410,12 @@ def _generar_pdf_informe(
     pdf.body_text("Resumen de indicadores por profesional del centro.")
 
     if not df_inst_c.empty:
-        inst_headers = ["Instrumento", "Total", "Citados", "Disp.", "Bloq.", "Atend.", "Ocup.%", "NoShow%", "Efect.%", "Rend."]
+        inst_headers = ["Instrumento", "Total", "Citados", "Disp.", "Bloq.", "Complet.", "Ocup.%", "NoShow%", "Efect.%", "Rend."]
         inst_rows = []
         for _, r in df_inst_c.iterrows():
             inst_rows.append([
                 str(r["instrumento"])[:25], f'{r["total"]:,.0f}', f'{r["citados"]:,.0f}',
-                f'{r["disponibles"]:,.0f}', f'{r["bloqueados"]:,.0f}', f'{r["atendidos"]:,.0f}',
+                f'{r["disponibles"]:,.0f}', f'{r["bloqueados"]:,.0f}', f'{r["completados"]:,.0f}',
                 f'{r["ocupacion"]:.1f}', f'{r["no_show"]:.1f}', f'{r["efectividad"]:.1f}',
                 f'{r["rendimiento"]:.1f}',
             ])

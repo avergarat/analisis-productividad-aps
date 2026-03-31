@@ -2244,7 +2244,17 @@ def page_informe_centro(dff: pd.DataFrame):
         MESES_N = {1:"Enero",2:"Febrero",3:"Marzo",4:"Abril",5:"Mayo",6:"Junio",
                    7:"Julio",8:"Agosto",9:"Septiembre",10:"Octubre",11:"Noviembre",12:"Diciembre"}
         meses_ord = sorted(df_centro["MES_NUM"].dropna().unique().tolist())
-        rango_meses = f"{MESES_N.get(int(meses_ord[0]), '?')} a {MESES_N.get(int(meses_ord[-1]), '?')}"
+        # Extraer año(s) de los datos
+        _years = set()
+        if "FECHA" in df_centro.columns:
+            _fechas = pd.to_datetime(df_centro["FECHA"], errors="coerce").dropna()
+            if not _fechas.empty:
+                _years = set(_fechas.dt.year.unique())
+        if _years:
+            _years_str = "-".join(str(int(y)) for y in sorted(_years))
+            rango_meses = f"{MESES_N.get(int(meses_ord[0]), '?')} a {MESES_N.get(int(meses_ord[-1]), '?')} {_years_str}"
+        else:
+            rango_meses = f"{MESES_N.get(int(meses_ord[0]), '?')} a {MESES_N.get(int(meses_ord[-1]), '?')}"
 
     # ── Calcular todos los KPIs del centro ────────────────────────────────────
     kpis = calculate_all_kpis(df_centro)

@@ -502,3 +502,233 @@ def detectar_alertas(df: pd.DataFrame) -> list:
             })
 
     return alertas
+
+
+# ──────────────────────────────────────────────
+# KPIs de Horario Extendido y Apertura Sabatina
+# ──────────────────────────────────────────────
+
+@_cache
+def kpis_horario_segmentado(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    KPIs comparativos por segmento horario:
+      Normal (Lun-Vie <18h), Extendido (Lun-Vie ≥18h), Sábado.
+    """
+    if df.empty:
+        return pd.DataFrame()
+
+    sabado = df.get("APERTURA_SABATINA", pd.Series(dtype=str))
+    ext = df.get("HORARIO_EXTENDIDO", pd.Series(dtype=str))
+
+    masks = {
+        "Normal (Lun-Vie <18h)": (sabado == "Lun-Vie") & (ext == "Normal"),
+        "Extendido (Lun-Vie ≥18h)": (sabado == "Lun-Vie") & (ext == "Extendido"),
+        "Apertura Sabatina": sabado == "Sábado",
+    }
+
+    rows = []
+    for seg, mask in masks.items():
+        grp = df[mask]
+        if grp.empty:
+            continue
+        citados = int((grp["ESTADO CUPO"] == "CITADO").sum())
+        disponibles = int((grp["ESTADO CUPO"] == "DISPONIBLE").sum())
+        bloqueados = int((grp["ESTADO CUPO"] == "BLOQUEADO").sum())
+        completados = int((grp["ESTADO CITA"] == "Completado").sum()) if "ESTADO CITA" in grp.columns else 0
+        rows.append({
+            "segmento": seg,
+            "total": len(grp),
+            "citados": citados,
+            "disponibles": disponibles,
+            "bloqueados": bloqueados,
+            "completados": completados,
+            "ocupacion": calc_ocupacion(grp),
+            "no_show": calc_no_show(grp),
+            "bloqueo": calc_bloqueo(grp),
+            "efectividad": calc_efectividad(grp),
+            "rendimiento": calc_rendimiento(grp),
+            "sobrecupo": calc_sobrecupo(grp),
+        })
+    return pd.DataFrame(rows)
+
+
+@_cache
+def kpis_por_profesional(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    KPIs por cada profesional.
+    Retorna DataFrame ordenado por total de cupos descendente.
+    """
+    if "PROFESIONAL" not in df.columns or df.empty:
+        return pd.DataFrame()
+
+    rows = []
+    for prof, grp in df.groupby("PROFESIONAL", observed=True):
+        if str(prof).strip() in ("", "Sin profesional", "nan"):
+            continue
+        citados = int((grp["ESTADO CUPO"] == "CITADO").sum())
+        disponibles = int((grp["ESTADO CUPO"] == "DISPONIBLE").sum())
+        bloqueados = int((grp["ESTADO CUPO"] == "BLOQUEADO").sum())
+        completados = int((grp["ESTADO CITA"] == "Completado").sum()) if "ESTADO CITA" in grp.columns else 0
+        rows.append({
+            "profesional": str(prof),
+            "total": len(grp),
+            "citados": citados,
+            "disponibles": disponibles,
+            "bloqueados": bloqueados,
+            "completados": completados,
+            "ocupacion": calc_ocupacion(grp),
+            "no_show": calc_no_show(grp),
+            "bloqueo": calc_bloqueo(grp),
+            "efectividad": calc_efectividad(grp),
+            "rendimiento": calc_rendimiento(grp),
+        })
+
+    return pd.DataFrame(rows).sort_values("total", ascending=False)
+
+
+@_cache
+def kpis_profesional_sabatino(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ranking de profesionales con atención el día sábado.
+    Filtra solo registros de Apertura Sabatina.
+    """
+    if "APERTURA_SABATINA" not in df.columns or "PROFESIONAL" not in df.columns:
+        return pd.DataFrame()
+
+    df_sab = df[df["APERTURA_SABATINA"] == "Sábado"]
+    if df_sab.empty:
+        return pd.DataFrame()
+
+    return kpis_por_profesional.__wrapped__(df_sab) if hasattr(kpis_por_profesional, "__wrapped__") else _kpis_prof_impl(df_sab)
+
+
+@_cache
+def kpis_profesional_extendido(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Ranking de profesionales con atención en horario extendido (≥18h Lun-Vie).
+    """
+    if "HORARIO_EXTENDIDO" not in df.columns or "PROFESIONAL" not in df.columns:
+        return pd.DataFrame()
+
+    sab = df.get("APERTURA_SABATINA", pd.Series(dtype=str))
+    df_ext = df[(df["HORARIO_EXTENDIDO"] == "Extendido") & (sab == "Lun-Vie")]
+    if df_ext.empty:
+        return pd.DataFrame()
+
+    return _kpis_prof_impl(df_ext)
+
+
+def _kpis_prof_impl(sub: pd.DataFrame) -> pd.DataFrame:
+    """Implementación compartida para KPIs por profesional sobre un sub-DF."""
+    rows = []
+    for prof, grp in sub.groupby("PROFESIONAL", observed=True):
+        if str(prof).strip() in ("", "Sin profesional", "nan"):
+            continue
+        citados = int((grp["ESTADO CUPO"] == "CITADO").sum())
+        disponibles = int((grp["ESTADO CUPO"] == "DISPONIBLE").sum())
+        bloqueados = int((grp["ESTADO CUPO"] == "BLOQUEADO").sum())
+        completados = int((grp["ESTADO CITA"] == "Completado").sum()) if "ESTADO CITA" in grp.columns else 0
+        rows.append({
+            "profesional": str(prof),
+            "total": len(grp),
+            "citados": citados,
+            "disponibles": disponibles,
+            "bloqueados": bloqueados,
+            "completados": completados,
+            "ocupacion": calc_ocupacion(grp),
+            "no_show": calc_no_show(grp),
+            "bloqueo": calc_bloqueo(grp),
+            "efectividad": calc_efectividad(grp),
+            "rendimiento": calc_rendimiento(grp),
+        })
+    return pd.DataFrame(rows).sort_values("total", ascending=False)
+
+
+@_cache
+def kpis_sabatino_por_mes(df: pd.DataFrame) -> pd.DataFrame:
+    """Evolución mensual de indicadores para Apertura Sabatina."""
+    if "APERTURA_SABATINA" not in df.columns or "MES_NUM" not in df.columns:
+        return pd.DataFrame()
+    df_sab = df[df["APERTURA_SABATINA"] == "Sábado"]
+    if df_sab.empty:
+        return pd.DataFrame()
+    return kpis_por_mes.__wrapped__(df_sab) if hasattr(kpis_por_mes, "__wrapped__") else _kpis_mes_impl(df_sab)
+
+
+@_cache
+def kpis_extendido_por_mes(df: pd.DataFrame) -> pd.DataFrame:
+    """Evolución mensual de indicadores para Horario Extendido Lun-Vie."""
+    sab = df.get("APERTURA_SABATINA", pd.Series(dtype=str))
+    ext = df.get("HORARIO_EXTENDIDO", pd.Series(dtype=str))
+    df_ext = df[(ext == "Extendido") & (sab == "Lun-Vie")]
+    if df_ext.empty:
+        return pd.DataFrame()
+    return _kpis_mes_impl(df_ext)
+
+
+def _kpis_mes_impl(sub: pd.DataFrame) -> pd.DataFrame:
+    """Implementación compartida para KPIs por mes sobre un sub-DF."""
+    MESES_ES = {
+        1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr",
+        5: "May", 6: "Jun", 7: "Jul", 8: "Ago",
+        9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic"
+    }
+    rows = []
+    for mes, grp in sub.groupby("MES_NUM", observed=True):
+        rows.append({
+            "mes": int(mes),
+            "mes_nombre": MESES_ES.get(int(mes), str(mes)),
+            "total": len(grp),
+            "citados": int((grp["ESTADO CUPO"] == "CITADO").sum()),
+            "disponibles": int((grp["ESTADO CUPO"] == "DISPONIBLE").sum()),
+            "bloqueados": int((grp["ESTADO CUPO"] == "BLOQUEADO").sum()),
+            "completados": int((grp["ESTADO CITA"] == "Completado").sum()) if "ESTADO CITA" in grp.columns else 0,
+            "ocupacion": calc_ocupacion(grp),
+            "no_show": calc_no_show(grp),
+            "bloqueo": calc_bloqueo(grp),
+            "efectividad": calc_efectividad(grp),
+            "rendimiento": calc_rendimiento(grp),
+        })
+    return pd.DataFrame(rows).sort_values("mes")
+
+
+@_cache
+def kpis_sabatino_por_instrumento(df: pd.DataFrame) -> pd.DataFrame:
+    """KPIs por instrumento para Apertura Sabatina."""
+    if "APERTURA_SABATINA" not in df.columns or "INSTRUMENTO" not in df.columns:
+        return pd.DataFrame()
+    df_sab = df[df["APERTURA_SABATINA"] == "Sábado"]
+    if df_sab.empty:
+        return pd.DataFrame()
+    return kpis_por_instrumento.__wrapped__(df_sab) if hasattr(kpis_por_instrumento, "__wrapped__") else _kpis_instr_impl(df_sab)
+
+
+@_cache
+def kpis_extendido_por_instrumento(df: pd.DataFrame) -> pd.DataFrame:
+    """KPIs por instrumento para Horario Extendido Lun-Vie."""
+    sab = df.get("APERTURA_SABATINA", pd.Series(dtype=str))
+    ext = df.get("HORARIO_EXTENDIDO", pd.Series(dtype=str))
+    df_ext = df[(ext == "Extendido") & (sab == "Lun-Vie")]
+    if df_ext.empty:
+        return pd.DataFrame()
+    return _kpis_instr_impl(df_ext)
+
+
+def _kpis_instr_impl(sub: pd.DataFrame) -> pd.DataFrame:
+    """Implementación compartida para KPIs por instrumento sobre un sub-DF."""
+    rows = []
+    for inst, grp in sub.groupby("INSTRUMENTO", observed=True):
+        rows.append({
+            "instrumento": str(inst),
+            "total": len(grp),
+            "citados": int((grp["ESTADO CUPO"] == "CITADO").sum()),
+            "disponibles": int((grp["ESTADO CUPO"] == "DISPONIBLE").sum()),
+            "bloqueados": int((grp["ESTADO CUPO"] == "BLOQUEADO").sum()),
+            "completados": int((grp["ESTADO CITA"] == "Completado").sum()) if "ESTADO CITA" in grp.columns else 0,
+            "ocupacion": calc_ocupacion(grp),
+            "no_show": calc_no_show(grp),
+            "bloqueo": calc_bloqueo(grp),
+            "efectividad": calc_efectividad(grp),
+            "rendimiento": calc_rendimiento(grp),
+        })
+    return pd.DataFrame(rows).sort_values("total", ascending=False)

@@ -90,8 +90,10 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
         _DROP_RAW = {
             "NOMBRE", "NOMBRE SOCIAL", "NUMERO TIPO IDENTIFICACION",
             "FECHA DE NACIMIENTO", "TELEFONOS", "DETALLE CUPO", "OBSERVACIONES",
-            "FUNCIONARIO CITADOR", "RUT PROFESIONAL", "PROFESIONAL",
+            "FUNCIONARIO CITADOR", "RUT PROFESIONAL",
             "FUNCIONARIO REALIZA BLOQUEO", "TELECONSULTA",
+            # Columnas pre-calculadas en algunos exports: siempre las derivamos
+            "HORA_NUM", "DIA_SEMANA", "MES_NUM",
         }
         usecols = [c for c in all_cols if _normalize_col_name(c) not in _DROP_RAW]
         if hasattr(file_obj, "seek"):
@@ -124,13 +126,12 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
     # FECHA
     if "FECHA" in df.columns:
         df["FECHA"] = pd.to_datetime(df["FECHA"], format="%d-%m-%Y", errors="coerce")
-        # Derivar MES_NUM desde FECHA si no existe como columna propia
-        if "MES_NUM" not in df.columns:
-            df["MES_NUM"] = df["FECHA"].dt.month
+        # SIEMPRE derivar MES_NUM desde FECHA (no confiar en columnas pre-calculadas)
+        df["MES_NUM"] = df["FECHA"].dt.month
 
-    # HORA_NUM: derivar desde HORA INICIO cuando no existe como columna propia
-    # (algunos exports IRIS incluyen HORA INICIO/TERMINO en vez de HORA_NUM directamente)
-    if "HORA_NUM" not in df.columns and "HORA INICIO" in df.columns:
+    # HORA_NUM: SIEMPRE derivar desde HORA INICIO para garantizar consistencia
+    # (algunos exports IRIS traen HORA_NUM pre-calculada, otros no)
+    if "HORA INICIO" in df.columns:
         def _hora_a_num(v):
             try:
                 import datetime as _dt
@@ -144,6 +145,8 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
             except Exception:
                 return np.nan
         df["HORA_NUM"] = df["HORA INICIO"].apply(_hora_a_num)
+    elif "HORA_NUM" in df.columns:
+        pass  # Usar la columna existente solo si no hay HORA INICIO
 
     # SECTOR: normalizar valores no estándar → NO INFORMADO
     if "SECTOR" in df.columns:
@@ -176,6 +179,18 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
             df["HORA_NUM"].notna() & (df["HORA_NUM"] >= 18), "Extendido", "Normal"
         )
 
+    # Día de la semana y Apertura Sabatina — SIEMPRE derivar desde FECHA
+    if "FECHA" in df.columns:
+        dow = df["FECHA"].dt.dayofweek  # 0=Lunes ... 5=Sábado, 6=Domingo
+        df["DIA_SEMANA"] = dow + 1       # 1=Lunes ... 6=Sábado, 7=Domingo
+        # Apertura Sabatina: sábado (dayofweek==5) en ventana horaria ~08:30-12:30
+        is_sabado = dow == 5
+        df["APERTURA_SABATINA"] = np.where(is_sabado, "Sábado", "Lun-Vie")
+
+    # PROFESIONAL: limpiar y normalizar
+    if "PROFESIONAL" in df.columns:
+        df["PROFESIONAL"] = df["PROFESIONAL"].fillna("Sin profesional").str.strip()
+
     if "EDAD_ANO" in df.columns:
         bins = [-1, 5, 14, 29, 64, 200]
         labels = ["0-5", "6-14", "15-29", "30-64", "65+"]
@@ -202,6 +217,7 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
         "SS", "ESTABLECIMIENTO", "TIPO ATENCION", "INSTRUMENTO", "TIPO CUPO",
         "ESTADO CUPO", "ESTADO CITA", "SECTOR", "TIPO DE AGENDAMIENTO",
         "TRIMESTRE", "MES_NOMBRE", "HORARIO_EXTENDIDO", "AGENDAMIENTO_REMOTO",
+        "APERTURA_SABATINA", "PROFESIONAL",
         "_archivo",
     ]
     import gc

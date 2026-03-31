@@ -41,6 +41,9 @@ _COL_TO_BQ: dict[str, str] = {
     "HORARIO_EXTENDIDO":     "horario_extendido",
     "AGENDAMIENTO_REMOTO":   "agendamiento_remoto",
     "GRUPO_ETARIO":          "grupo_etario",
+    "PROFESIONAL":           "profesional",
+    "DIA_SEMANA":            "dia_semana",
+    "APERTURA_SABATINA":     "apertura_sabatina",
     "RENDIMIENTO":           "rendimiento",
     "CUPOS_UTIL_BIN":        "cupos_util_bin",
     "HORA_NUM":              "hora_num",
@@ -66,6 +69,9 @@ _SCHEMA = [
     ("horario_extendido",  "STRING"),
     ("agendamiento_remoto","STRING"),
     ("grupo_etario",       "STRING"),
+    ("profesional",        "STRING"),
+    ("dia_semana",         "INTEGER"),
+    ("apertura_sabatina",  "STRING"),
     ("rendimiento",        "FLOAT64"),
     ("cupos_util_bin",     "INTEGER"),
     ("hora_num",           "FLOAT64"),
@@ -187,7 +193,7 @@ def _from_bq(df_bq: pd.DataFrame) -> pd.DataFrame:
         "SS", "ESTABLECIMIENTO", "TIPO ATENCION", "INSTRUMENTO", "TIPO CUPO",
         "ESTADO CUPO", "ESTADO CITA", "SECTOR", "TIPO DE AGENDAMIENTO",
         "TRIMESTRE", "MES_NOMBRE", "HORARIO_EXTENDIDO", "AGENDAMIENTO_REMOTO",
-        "GRUPO_ETARIO", "_archivo",
+        "GRUPO_ETARIO", "PROFESIONAL", "APERTURA_SABATINA", "_archivo",
     ]
     for c in _CAT:
         if c in df.columns:

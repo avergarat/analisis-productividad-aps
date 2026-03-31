@@ -264,7 +264,7 @@ def render_sidebar() -> dict:
         # Navegación
         nav = st.radio(
             "Navegación",
-            ["🏠 Inicio y Carga", "📊 Dashboard KPIs", "📈 Evolución Temporal",
+            ["🏠 Inicio y Carga", "🏥 Cumplimiento General", "📊 Dashboard KPIs", "📈 Evolución Temporal",
              "🔍 Análisis Detallado", "⚠️ Alertas y Brechas", "📋 Informe por Centro"],
             label_visibility="collapsed",
         )
@@ -2188,6 +2188,220 @@ def page_alertas(dff: pd.DataFrame):
 
 
 # ─────────────────────────────────────────────────────────────
+# PÁGINA: CUMPLIMIENTO GENERAL (consulta directa BQ agregada)
+# ─────────────────────────────────────────────────────────────
+def page_cumplimiento_general():
+    """
+    Muestra el cumplimiento de los 10 KPIs de TODOS los centros almacenados
+    en BigQuery mediante una consulta agregada (sin descargar filas).
+    """
+    from src.kpis import semaforo, KPI_DEFINITIONS
+
+    st.markdown("""
+    <div class="main-header">
+        <h1>🏥 Cumplimiento General — Todos los Centros</h1>
+        <p>Matriz de indicadores KPI de todos los establecimientos almacenados en BigQuery · Sin necesidad de cargar datos</p>
+    </div>
+    """, unsafe_allow_html=True)
+
+    if not bq.bq_configured():
+        st.warning("BigQuery no está configurado. Configura las credenciales en Streamlit Secrets.")
+        return
+
+    with st.spinner("Consultando BigQuery (agregado por centro)..."):
+        df_agg, msg1 = bq.load_cumplimiento_centros()
+        df_var, msg2 = bq.load_cumplimiento_variacion_mensual()
+
+    if df_agg is None or df_agg.empty:
+        st.warning(f"Sin datos disponibles. {msg1}")
+        return
+
+    # ── Calcular KPIs a partir de los conteos agregados ───────────────────
+    def _safe_pct(num, den):
+        return round((num / den) * 100, 2) if den and den > 0 else 0.0
+
+    # Precalcular variación mensual por centro
+    var_mensual = {}
+    if df_var is not None and not df_var.empty:
+        for centro, grp in df_var.groupby("establecimiento"):
+            grp = grp.sort_values("mes_num")
+            ocup_series = grp.apply(
+                lambda r: _safe_pct(r["citados"], r["citados"] + r["disponibles"]), axis=1
+            )
+            diffs = ocup_series.diff().abs().dropna()
+            var_mensual[centro] = round(diffs.max(), 2) if len(diffs) > 0 else 0.0
+
+    rows = []
+    for _, r in df_agg.iterrows():
+        centro = r["establecimiento"]
+        total = int(r["total"])
+        citados = int(r["citados"])
+        disponibles = int(r["disponibles"])
+        completados = int(r["completados"])
+        row = {"centro": centro, "total": total}
+
+        # 1. Ocupación
+        v = _safe_pct(citados, citados + disponibles)
+        row["ocupacion_valor"] = v
+        row["ocupacion_semaforo"] = semaforo(v, "ocupacion")
+
+        # 2. No-Show
+        v = _safe_pct(citados - completados, citados)
+        row["no_show_valor"] = v
+        row["no_show_semaforo"] = semaforo(v, "no_show")
+
+        # 3. Bloqueo
+        v = _safe_pct(int(r["bloqueados"]), total)
+        row["bloqueo_valor"] = v
+        row["bloqueo_semaforo"] = semaforo(v, "bloqueo")
+
+        # 4. Efectividad
+        v = _safe_pct(completados, citados)
+        row["efectividad_valor"] = v
+        row["efectividad_semaforo"] = semaforo(v, "efectividad")
+
+        # 5. Rendimiento
+        v = round(float(r["avg_rendimiento"]), 1) if pd.notna(r["avg_rendimiento"]) else 0.0
+        row["rendimiento_valor"] = v
+        row["rendimiento_semaforo"] = semaforo(v, "rendimiento")
+
+        # 6. Sobrecupo
+        v = _safe_pct(int(r["sobrecupos"]), total)
+        row["sobrecupo_valor"] = v
+        row["sobrecupo_semaforo"] = semaforo(v, "sobrecupo")
+
+        # 7. Cobertura Sectorial
+        v = _safe_pct(int(r["sector_informado"]), total)
+        row["cobertura_sectorial_valor"] = v
+        row["cobertura_sectorial_semaforo"] = semaforo(v, "cobertura_sectorial")
+
+        # 8. Agendamiento Remoto
+        v = _safe_pct(int(r["agend_remoto"]), total)
+        row["agendamiento_remoto_valor"] = v
+        row["agendamiento_remoto_semaforo"] = semaforo(v, "agendamiento_remoto")
+
+        # 9. Variación Mensual
+        v = var_mensual.get(centro, 0.0)
+        row["variacion_mensual_valor"] = v
+        row["variacion_mensual_semaforo"] = semaforo(v, "variacion_mensual")
+
+        # 10. Ocupación Extendida
+        ext_c = int(r["ext_citados"])
+        ext_d = int(r["ext_disponibles"])
+        v = _safe_pct(ext_c, ext_c + ext_d)
+        row["ocupacion_extendida_valor"] = v
+        row["ocupacion_extendida_semaforo"] = semaforo(v, "ocupacion_extendida")
+
+        rows.append(row)
+
+    df_resumen = pd.DataFrame(rows).sort_values("ocupacion_valor", ascending=False)
+
+    # ── Renderizar tabla HTML con semáforo ────────────────────────────────
+    _kpi_cols = [
+        ("ocupacion", "Ocupación"),
+        ("no_show", "No-Show"),
+        ("bloqueo", "Bloqueo"),
+        ("efectividad", "Efectividad"),
+        ("rendimiento", "Rendimiento"),
+        ("sobrecupo", "Sobrecupo"),
+        ("cobertura_sectorial", "Cob. Sectorial"),
+        ("agendamiento_remoto", "Agend. Remoto"),
+        ("variacion_mensual", "Var. Mensual"),
+        ("ocupacion_extendida", "Ocup. Extendida"),
+    ]
+
+    _sem_icon = {"verde": "🟢", "amarillo": "🟡", "rojo": "🔴", "gris": "⚪"}
+    _sem_bg = {
+        "verde": "background-color: #d4edda",
+        "amarillo": "background-color: #fff3cd",
+        "rojo": "background-color: #f8d7da",
+        "gris": "background-color: #e9ecef",
+    }
+
+    html_rows = []
+    for _, r in df_resumen.iterrows():
+        cells = f"<td style='font-weight:600; white-space:nowrap'>{r['centro']}</td>"
+        cells += f"<td style='text-align:center'>{int(r['total']):,}</td>"
+        for kpi_key, _ in _kpi_cols:
+            val = r[f"{kpi_key}_valor"]
+            sem = r[f"{kpi_key}_semaforo"]
+            icon = _sem_icon.get(sem, "⚪")
+            bg = _sem_bg.get(sem, "")
+            unidad = KPI_DEFINITIONS.get(kpi_key, {}).get("unidad", "")
+            if unidad == "%":
+                display = f"{val:.1f}%"
+            elif unidad == "min":
+                display = f"{val:.1f}"
+            elif unidad == "pp":
+                display = f"{val:.1f}"
+            else:
+                display = f"{val:.1f}"
+            cells += f"<td style='text-align:center; {bg}'>{icon} {display}</td>"
+        html_rows.append(f"<tr>{cells}</tr>")
+
+    th = "<th style='white-space:nowrap'>Centro de Salud</th><th>Registros</th>"
+    for _, label in _kpi_cols:
+        th += f"<th style='white-space:nowrap; text-align:center'>{label}</th>"
+
+    st.markdown(
+        "Vista comparativa de los **10 indicadores clave** para cada "
+        "centro de salud almacenado. Semáforo: "
+        "🟢 dentro de meta · 🟡 observación · 🔴 brecha crítica · ⚪ sin umbral."
+    )
+
+    resumen_html = f"""
+    <div style="overflow-x:auto; margin-bottom:1.5rem;">
+    <table style="border-collapse:collapse; width:100%; font-size:0.85rem; border:1px solid #dee2e6;">
+    <thead><tr style="background:#343a40; color:#fff;">{th}</tr></thead>
+    <tbody>{"".join(html_rows)}</tbody>
+    </table>
+    </div>
+    """
+    st.markdown(resumen_html, unsafe_allow_html=True)
+
+    # ── Resumen estadístico ───────────────────────────────────────────────
+    n_centros = len(df_resumen)
+    n_verde = sum(
+        1 for _, r in df_resumen.iterrows()
+        for kpi_key, _ in _kpi_cols
+        if r.get(f"{kpi_key}_semaforo") == "verde"
+    )
+    n_amarillo = sum(
+        1 for _, r in df_resumen.iterrows()
+        for kpi_key, _ in _kpi_cols
+        if r.get(f"{kpi_key}_semaforo") == "amarillo"
+    )
+    n_rojo = sum(
+        1 for _, r in df_resumen.iterrows()
+        for kpi_key, _ in _kpi_cols
+        if r.get(f"{kpi_key}_semaforo") == "rojo"
+    )
+    total_eval = n_centros * len(_kpi_cols)
+    st.caption(
+        f"📊 {n_centros} centros · {total_eval} evaluaciones · "
+        f"🟢 {n_verde} en meta · 🟡 {n_amarillo} en observación · 🔴 {n_rojo} en brecha crítica"
+    )
+
+    # ── Leyenda de umbrales ───────────────────────────────────────────────
+    with st.expander("📖 Umbrales y definiciones de cada indicador"):
+        for kpi_key, label in _kpi_cols:
+            defn = KPI_DEFINITIONS.get(kpi_key, {})
+            ok = defn.get("umbral_ok")
+            alerta = defn.get("umbral_alerta")
+            desc = defn.get("descripcion", "")
+            unidad = defn.get("unidad", "")
+            ok_str = f"{ok}{unidad}" if ok is not None else "—"
+            alerta_str = f"{alerta}{unidad}" if alerta is not None else "—"
+            st.markdown(
+                f"**{label}**: {desc}  \n"
+                f"🟢 Meta: ≥{ok_str} · 🟡 Alerta: ≥{alerta_str} · 🔴 Brecha"
+                if defn.get("direccion") == "mayor_es_mejor" else
+                f"**{label}**: {desc}  \n"
+                f"🟢 Meta: ≤{ok_str} · 🟡 Alerta: ≤{alerta_str} · 🔴 Brecha"
+            )
+
+
+# ─────────────────────────────────────────────────────────────
 # PÁGINA 6: INFORME POR CENTRO DE SALUD
 # ─────────────────────────────────────────────────────────────
 def page_informe_centro(dff: pd.DataFrame):
@@ -2197,8 +2411,7 @@ def page_informe_centro(dff: pd.DataFrame):
         semaforo, calc_ocupacion, calc_no_show, calc_bloqueo,
         calc_efectividad, calc_rendimiento, calc_sobrecupo,
         calc_cobertura_sectorial, calc_agendamiento_remoto,
-        calc_ocupacion_extendida, resumen_cumplimiento_centros,
-        KPI_DEFINITIONS,
+        calc_ocupacion_extendida,
     )
 
     st.markdown("""
@@ -2215,96 +2428,6 @@ def page_informe_centro(dff: pd.DataFrame):
     if "ESTABLECIMIENTO" not in dff.columns:
         st.warning("Los datos no contienen la columna ESTABLECIMIENTO.")
         return
-
-    # ══════════════════════════════════════════════════════════════════════════
-    # CUADRO RESUMEN: Cumplimiento KPIs de TODOS los centros cargados
-    # ══════════════════════════════════════════════════════════════════════════
-    df_resumen = resumen_cumplimiento_centros(dff)
-    if not df_resumen.empty:
-        st.markdown("---")
-        st.markdown("## 🏥 Resumen de Cumplimiento — Todos los Centros")
-        st.markdown(
-            "Vista comparativa automática de los **10 indicadores clave** para cada "
-            "centro de salud cargado. Semáforo: "
-            "🟢 dentro de meta · 🟡 observación · 🔴 brecha crítica · ⚪ sin umbral."
-        )
-
-        _kpi_cols = [
-            ("ocupacion", "Ocupación"),
-            ("no_show", "No-Show"),
-            ("bloqueo", "Bloqueo"),
-            ("efectividad", "Efectividad"),
-            ("rendimiento", "Rendimiento"),
-            ("sobrecupo", "Sobrecupo"),
-            ("cobertura_sectorial", "Cob. Sectorial"),
-            ("agendamiento_remoto", "Agend. Remoto"),
-            ("variacion_mensual", "Var. Mensual"),
-            ("ocupacion_extendida", "Ocup. Extendida"),
-        ]
-
-        _sem_icon = {"verde": "🟢", "amarillo": "🟡", "rojo": "🔴", "gris": "⚪"}
-        _sem_bg = {
-            "verde": "background-color: #d4edda",
-            "amarillo": "background-color: #fff3cd",
-            "rojo": "background-color: #f8d7da",
-            "gris": "background-color: #e9ecef",
-        }
-
-        # Construir tabla HTML con colores
-        html_rows = []
-        for _, r in df_resumen.iterrows():
-            cells = f"<td style='font-weight:600; white-space:nowrap'>{r['centro']}</td>"
-            cells += f"<td style='text-align:center'>{int(r['total']):,}</td>"
-            for kpi_key, _ in _kpi_cols:
-                val = r[f"{kpi_key}_valor"]
-                sem = r[f"{kpi_key}_semaforo"]
-                icon = _sem_icon.get(sem, "⚪")
-                bg = _sem_bg.get(sem, "")
-                unidad = KPI_DEFINITIONS.get(kpi_key, {}).get("unidad", "")
-                if unidad == "%":
-                    display = f"{val:.1f}%"
-                elif unidad == "min":
-                    display = f"{val:.1f}"
-                elif unidad == "pp":
-                    display = f"{val:.1f}"
-                else:
-                    display = f"{val:.1f}"
-                cells += f"<td style='text-align:center; {bg}'>{icon} {display}</td>"
-            html_rows.append(f"<tr>{cells}</tr>")
-
-        # Encabezados
-        th = "<th style='white-space:nowrap'>Centro</th><th>N</th>"
-        for _, label in _kpi_cols:
-            th += f"<th style='white-space:nowrap; text-align:center'>{label}</th>"
-
-        resumen_html = f"""
-        <div style="overflow-x:auto; margin-bottom:1.5rem;">
-        <table style="border-collapse:collapse; width:100%; font-size:0.85rem; border:1px solid #dee2e6;">
-        <thead><tr style="background:#343a40; color:#fff;">{th}</tr></thead>
-        <tbody>{"".join(html_rows)}</tbody>
-        </table>
-        </div>
-        """
-        st.markdown(resumen_html, unsafe_allow_html=True)
-
-        # Conteo de semáforos por centro
-        n_centros = len(df_resumen)
-        n_verde = sum(
-            1 for _, r in df_resumen.iterrows()
-            for kpi_key, _ in _kpi_cols
-            if r.get(f"{kpi_key}_semaforo") == "verde"
-        )
-        n_rojo = sum(
-            1 for _, r in df_resumen.iterrows()
-            for kpi_key, _ in _kpi_cols
-            if r.get(f"{kpi_key}_semaforo") == "rojo"
-        )
-        total_indicadores = n_centros * len(_kpi_cols)
-        st.caption(
-            f"📊 {n_centros} centros · {total_indicadores} evaluaciones · "
-            f"🟢 {n_verde} en meta · 🔴 {n_rojo} en brecha crítica"
-        )
-        st.markdown("---")
 
     # ── Selector de Centro ────────────────────────────────────────────────────
     centros_disponibles = sorted(dff["ESTABLECIMIENTO"].dropna().unique().tolist())
@@ -3043,6 +3166,8 @@ def main():
 
     if nav == "🏠 Inicio y Carga":
         page_inicio()
+    elif nav == "🏥 Cumplimiento General":
+        page_cumplimiento_general()
     elif nav == "📊 Dashboard KPIs":
         if _bq_sin_cargar:
             st.info("🗄️ Usa el botón **📥 Cargar datos filtrados** en el panel lateral para analizar los datos de BigQuery.", icon="ℹ️")

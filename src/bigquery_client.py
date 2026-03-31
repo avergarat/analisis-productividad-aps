@@ -453,6 +453,69 @@ def delete_archivo(archivo: str) -> tuple[bool, str]:
         return False, f"Error: {e}"
 
 
+def load_cumplimiento_centros() -> tuple[pd.DataFrame | None, str]:
+    """
+    Consulta AGREGADA a BigQuery que retorna los conteos necesarios para calcular
+    los 10 KPIs por cada establecimiento, SIN descargar filas individuales.
+    Muy liviana: solo trae ~1 fila por establecimiento.
+    """
+    if not bq_configured():
+        return None, "BigQuery no configurado."
+    try:
+        client = _client()
+        q = f"""
+        SELECT
+            establecimiento,
+            COUNT(*)                                                        AS total,
+            COUNTIF(estado_cupo = 'CITADO')                                 AS citados,
+            COUNTIF(estado_cupo = 'DISPONIBLE')                             AS disponibles,
+            COUNTIF(estado_cupo = 'BLOQUEADO')                              AS bloqueados,
+            COUNTIF(estado_cupo = 'CITADO' AND estado_cita = 'Completado')  AS completados,
+            COUNTIF(tipo_cupo = 'Sobrecupo')                                AS sobrecupos,
+            COUNTIF(sector IS NOT NULL AND sector != 'NO INFORMADO')        AS sector_informado,
+            COUNTIF(tipo_agendamiento IN ('Telefónicamente','Telefonicamente','Telesalud')) AS agend_remoto,
+            COUNTIF(hora_num >= 18 AND estado_cupo = 'CITADO')              AS ext_citados,
+            COUNTIF(hora_num >= 18 AND estado_cupo = 'DISPONIBLE')          AS ext_disponibles,
+            AVG(IF(rendimiento > 0, rendimiento, NULL))                     AS avg_rendimiento
+        FROM {_tref()}
+        GROUP BY establecimiento
+        ORDER BY establecimiento
+        """
+        df = client.query(q).to_dataframe(create_bqstorage_client=False)
+        if df.empty:
+            return None, "Sin datos en BigQuery."
+        return df, f"{len(df)} centros encontrados."
+    except Exception as e:
+        return None, f"Error al consultar BigQuery: {e}"
+
+
+def load_cumplimiento_variacion_mensual() -> tuple[pd.DataFrame | None, str]:
+    """
+    Consulta AGREGADA que retorna ocupación mensual por establecimiento
+    para calcular variación mensual. Solo trae ~12 filas por centro.
+    """
+    if not bq_configured():
+        return None, "BigQuery no configurado."
+    try:
+        client = _client()
+        q = f"""
+        SELECT
+            establecimiento,
+            mes_num,
+            COUNTIF(estado_cupo = 'CITADO')     AS citados,
+            COUNTIF(estado_cupo = 'DISPONIBLE')  AS disponibles
+        FROM {_tref()}
+        GROUP BY establecimiento, mes_num
+        ORDER BY establecimiento, mes_num
+        """
+        df = client.query(q).to_dataframe(create_bqstorage_client=False)
+        if df.empty:
+            return None, "Sin datos."
+        return df, "OK"
+    except Exception as e:
+        return None, f"Error: {e}"
+
+
 def delete_all_data() -> tuple[bool, str]:
     """Elimina TODOS los registros de la tabla BigQuery."""
     if not bq_configured():

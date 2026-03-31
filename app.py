@@ -2437,12 +2437,15 @@ def _generar_html_informe(
 ) -> str:
     """Genera informe HTML autocontenido con gráficos Plotly embebidos."""
     import plotly.graph_objects as go
+    from plotly.offline import get_plotlyjs_version
     from src.kpis import semaforo, KPI_DEFINITIONS
     from src.charts import (
         chart_estado_cupos, chart_evolucion_mensual, chart_noshow_vs_umbral,
         chart_rendimiento_instrumento, chart_sector, chart_tipo_atencion,
         chart_multi_kpi, chart_heatmap_instrumento_mes,
     )
+
+    plotly_js_ver = get_plotlyjs_version()
 
     def _fig_to_img(fig, width=900, height=450):
         """Convierte fig Plotly a div HTML embebido (Plotly JS se carga una vez en <head>)."""
@@ -2637,7 +2640,7 @@ def _generar_html_informe(
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Informe Productividad — {centro_sel}</title>
-<script src="https://cdn.plot.ly/plotly-2.35.2.min.js" charset="utf-8"></script>
+<script src="https://cdn.plot.ly/plotly-{plotly_js_ver}.min.js" charset="utf-8"></script>
 <style>
   @media print {{ body {{ margin: 0.5cm; }} .no-print {{ display: none; }} .page-break {{ page-break-before: always; }} }}
   body {{ font-family: 'Segoe UI', Arial, sans-serif; color: #2C3E50; max-width: 1100px; margin: 0 auto; padding: 20px; line-height: 1.6; }}

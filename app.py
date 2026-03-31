@@ -50,7 +50,10 @@ check_password()
 
 warnings.filterwarnings("ignore")
 
-
+import sys, os
+_APP_DIR = os.path.dirname(os.path.abspath(__file__))
+if _APP_DIR not in sys.path:
+    sys.path.insert(0, _APP_DIR)
 
 from src.processor import process_iris_file, consolidate_files
 from src.kpis import (

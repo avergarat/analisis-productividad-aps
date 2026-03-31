@@ -23,6 +23,9 @@ from datetime import datetime, timezone
 
 import pandas as pd
 
+_bq_client_cache = None
+_bq_client_project = None
+
 # ── Mapeo columnas DataFrame (IRIS) ↔ BigQuery (snake_case) ─────────────────
 _COL_TO_BQ: dict[str, str] = {
     "SS":                    "ss",
@@ -104,14 +107,20 @@ def bq_configured() -> bool:
 
 
 def _client():
+    global _bq_client_cache, _bq_client_project
     from google.cloud import bigquery
     from google.oauth2 import service_account
     cfg = _cfg()
+    pid = cfg["project_id"]
+    if _bq_client_cache is not None and _bq_client_project == pid:
+        return _bq_client_cache
     info = json.loads(cfg["credentials_json"])
     creds = service_account.Credentials.from_service_account_info(
         info, scopes=["https://www.googleapis.com/auth/bigquery"]
     )
-    return bigquery.Client(project=cfg["project_id"], credentials=creds)
+    _bq_client_cache = bigquery.Client(project=pid, credentials=creds)
+    _bq_client_project = pid
+    return _bq_client_cache
 
 
 def _full_table_id() -> str:
@@ -195,9 +204,7 @@ def _from_bq(df_bq: pd.DataFrame) -> pd.DataFrame:
 
     if "FECHA" in df.columns:
         df["FECHA"] = pd.to_datetime(df["FECHA"], errors="coerce")
-    if "MES_NUM" in df.columns:
-        df["MES_NUM"] = pd.to_numeric(df["MES_NUM"], errors="coerce")
-    for c in ["RENDIMIENTO", "HORA_NUM", "EDAD_ANO", "CUPOS_UTIL_BIN"]:
+    for c in ["MES_NUM", "RENDIMIENTO", "HORA_NUM", "EDAD_ANO", "CUPOS_UTIL_BIN"]:
         if c in df.columns:
             df[c] = pd.to_numeric(df[c], errors="coerce")
 
@@ -207,9 +214,9 @@ def _from_bq(df_bq: pd.DataFrame) -> pd.DataFrame:
         "TRIMESTRE", "MES_NOMBRE", "HORARIO_EXTENDIDO", "AGENDAMIENTO_REMOTO",
         "GRUPO_ETARIO", "PROFESIONAL", "APERTURA_SABATINA", "_archivo",
     ]
-    for c in _CAT:
-        if c in df.columns:
-            df[c] = df[c].astype("category")
+    cat_present = [c for c in _CAT if c in df.columns]
+    if cat_present:
+        df[cat_present] = df[cat_present].astype("category")
 
     if "GRUPO_ETARIO" in df.columns:
         from pandas.api.types import CategoricalDtype
@@ -280,6 +287,40 @@ def get_record_count() -> int:
         return 0
 
 
+def get_filter_options_and_count() -> tuple[dict, int]:
+    """
+    Retorna (opciones_filtro, total_registros) en una sola consulta BQ.
+    Ahorra 1 round-trip al combinar get_filter_options + get_record_count.
+    """
+    if not bq_configured():
+        return {}, 0
+    try:
+        client = _client()
+        q = f"""
+        SELECT
+            COUNT(*) AS total,
+            ARRAY_AGG(DISTINCT establecimiento  IGNORE NULLS ORDER BY establecimiento)  AS establecimientos,
+            ARRAY_AGG(DISTINCT sector           IGNORE NULLS ORDER BY sector)           AS sectores,
+            ARRAY_AGG(DISTINCT instrumento      IGNORE NULLS ORDER BY instrumento)      AS instrumentos,
+            ARRAY_AGG(DISTINCT tipo_atencion    IGNORE NULLS ORDER BY tipo_atencion)    AS tipos_atencion,
+            ARRAY_AGG(DISTINCT tipo_cupo        IGNORE NULLS ORDER BY tipo_cupo)        AS tipos_cupo,
+            ARRAY_AGG(DISTINCT mes_num          IGNORE NULLS ORDER BY mes_num)          AS meses
+        FROM {_tref()}
+        """
+        row = list(client.query(q).result())[0]
+        opts = {
+            "establecimientos": list(row.establecimientos or []),
+            "sectores":         list(row.sectores or []),
+            "instrumentos":     list(row.instrumentos or []),
+            "tipos_atencion":   list(row.tipos_atencion or []),
+            "tipos_cupo":       list(row.tipos_cupo or []),
+            "meses":            [int(m) for m in (row.meses or [])],
+        }
+        return opts, int(row.total)
+    except Exception:
+        return {}, 0
+
+
 def get_filter_options() -> dict:
     """
     Retorna valores distintos de cada dimensión para poblar los filtros del sidebar.
@@ -342,7 +383,8 @@ def load_filtered(
 ) -> tuple[pd.DataFrame | None, str]:
     """
     Carga desde BigQuery solo las filas que coinciden con los filtros activos.
-    Verifica el conteo ANTES de traer datos para proteger la RAM.
+    Sin filtros: carga directa sin COUNT previo.
+    Con filtros: verifica conteo ANTES de traer datos para proteger la RAM.
     """
     if not bq_configured():
         return None, "BigQuery no configurado."
@@ -350,40 +392,47 @@ def load_filtered(
         client = _client()
 
         def _in_str(col: str, vals: list) -> str:
-            """Cláusula IN para columnas STRING."""
             escaped = ", ".join([f"'{str(v).replace(chr(39), chr(39)*2)}'" for v in vals])
             return f"{col} IN ({escaped})"
 
         def _in_int(col: str, vals: list) -> str:
-            """Cláusula IN para columnas INTEGER (sin comillas)."""
             nums = ", ".join([str(int(v)) for v in vals])
             return f"{col} IN ({nums})"
 
         conds = []
         if centros:         conds.append(_in_str("establecimiento", centros))
-        if meses:           conds.append(_in_int("mes_num", meses))      # INT64
+        if meses:           conds.append(_in_int("mes_num", meses))
         if instrumentos:    conds.append(_in_str("instrumento", instrumentos))
         if sectores:        conds.append(_in_str("sector", sectores))
         if tipos_atencion:  conds.append(_in_str("tipo_atencion", tipos_atencion))
         if tipos_cupo:      conds.append(_in_str("tipo_cupo", tipos_cupo))
         where = f"WHERE {' AND '.join(conds)}" if conds else ""
 
-        n = list(client.query(
-            f"SELECT COUNT(*) AS n FROM {_tref()} {where}"
-        ).result())[0].n
+        # Columnas a traer (excluir _cargado_en de origen)
+        _sel_cols = ", ".join([name for name, _ in _SCHEMA if name != "_cargado_en"])
 
-        if n == 0:
+        if conds:
+            # Con filtros: verificar conteo primero para no reventar RAM
+            n = list(client.query(
+                f"SELECT COUNT(*) AS n FROM {_tref()} {where}"
+            ).result())[0].n
+            if n == 0:
+                return None, "Sin datos para los filtros seleccionados."
+            if n > max_rows:
+                return None, (
+                    f"La selección contiene **{n:,} filas** "
+                    f"(límite de seguridad: {max_rows:,}). "
+                    "Reduce los filtros (menos CESFAM o menos meses) y vuelve a cargar."
+                )
+            sql = f"SELECT {_sel_cols} FROM {_tref()} {where}"
+        else:
+            # Sin filtros: carga directa con LIMIT, sin COUNT adicional
+            sql = f"SELECT {_sel_cols} FROM {_tref()} LIMIT {max_rows}"
+
+        df_bq = client.query(sql).to_dataframe()
+        if df_bq.empty:
             return None, "Sin datos para los filtros seleccionados."
-        if n > max_rows:
-            return None, (
-                f"La selección contiene **{n:,} filas** "
-                f"(límite de seguridad: {max_rows:,}). "
-                "Reduce los filtros (menos CESFAM o menos meses) y vuelve a cargar."
-            )
-
-        df_bq = client.query(
-            f"SELECT * EXCEPT(_cargado_en) FROM {_tref()} {where}"
-        ).to_dataframe()
+        n = len(df_bq)
         return _from_bq(df_bq), f"{n:,} registros cargados desde BigQuery."
     except Exception as e:
         return None, f"Error al consultar BigQuery: {e}"

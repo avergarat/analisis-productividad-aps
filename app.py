@@ -176,12 +176,12 @@ if st.session_state.df is None and not st.session_state.demo_loaded:
         # Los datos se cargan solo cuando el usuario aplica filtros
         if not st.session_state.bq_filter_options:
             try:
-                opts = bq.get_filter_options()
+                opts, n_total = bq.get_filter_options_and_count()
                 if opts:
                     st.session_state.bq_filter_options = opts
-                    st.session_state.bq_total_registros = bq.get_record_count()
+                    st.session_state.bq_total_registros = n_total
                     st.toast(
-                        f"🗄️ BigQuery conectado · {st.session_state.bq_total_registros:,} registros disponibles",
+                        f"🗄️ BigQuery conectado · {n_total:,} registros disponibles",
                         icon="✅"
                     )
             except Exception:
@@ -456,8 +456,9 @@ def page_inicio():
                                 ok_bq, msg_bq = bq.insert_data(df_nuevos)
                             if ok_bq:
                                 # Actualizar metadatos BQ en sesión
-                                st.session_state.bq_filter_options = bq.get_filter_options()
-                                st.session_state.bq_total_registros = bq.get_record_count()
+                                _opts, _n = bq.get_filter_options_and_count()
+                                st.session_state.bq_filter_options = _opts
+                                st.session_state.bq_total_registros = _n
                                 st.info(msg_bq, icon="🗄️")
                                 # Verificación de integridad post-carga
                                 n_bq_after = st.session_state.bq_total_registros

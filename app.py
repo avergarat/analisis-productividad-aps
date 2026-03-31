@@ -2294,9 +2294,9 @@ def page_cumplimiento_general():
 
         rows.append(row)
 
-    df_resumen = pd.DataFrame(rows).sort_values("ocupacion_valor", ascending=False)
+    df_resumen = pd.DataFrame(rows)
 
-    # ── Renderizar tabla HTML con semáforo ────────────────────────────────
+    # ── Definiciones de columnas KPI ──────────────────────────────────────
     _kpi_cols = [
         ("ocupacion", "Ocupación"),
         ("no_show", "No-Show"),
@@ -2318,46 +2318,103 @@ def page_cumplimiento_general():
         "gris": "background-color: #e9ecef",
     }
 
-    html_rows = []
-    for _, r in df_resumen.iterrows():
-        cells = f"<td style='font-weight:600; white-space:nowrap'>{r['centro']}</td>"
-        cells += f"<td style='text-align:center'>{int(r['total']):,}</td>"
-        for kpi_key, _ in _kpi_cols:
-            val = r[f"{kpi_key}_valor"]
-            sem = r[f"{kpi_key}_semaforo"]
-            icon = _sem_icon.get(sem, "⚪")
-            bg = _sem_bg.get(sem, "")
-            unidad = KPI_DEFINITIONS.get(kpi_key, {}).get("unidad", "")
-            if unidad == "%":
-                display = f"{val:.1f}%"
-            elif unidad == "min":
-                display = f"{val:.1f}"
-            elif unidad == "pp":
-                display = f"{val:.1f}"
-            else:
-                display = f"{val:.1f}"
-            cells += f"<td style='text-align:center; {bg}'>{icon} {display}</td>"
-        html_rows.append(f"<tr>{cells}</tr>")
-
-    th = "<th style='white-space:nowrap'>Centro de Salud</th><th>Registros</th>"
-    for _, label in _kpi_cols:
-        th += f"<th style='white-space:nowrap; text-align:center'>{label}</th>"
-
+    # ── Selector de ranking ───────────────────────────────────────────────
     st.markdown(
         "Vista comparativa de los **10 indicadores clave** para cada "
         "centro de salud almacenado. Semáforo: "
         "🟢 dentro de meta · 🟡 observación · 🔴 brecha crítica · ⚪ sin umbral."
     )
 
-    resumen_html = f"""
-    <div style="overflow-x:auto; margin-bottom:1.5rem;">
-    <table style="border-collapse:collapse; width:100%; font-size:0.85rem; border:1px solid #dee2e6;">
-    <thead><tr style="background:#343a40; color:#fff;">{th}</tr></thead>
-    <tbody>{"".join(html_rows)}</tbody>
-    </table>
-    </div>
-    """
-    st.markdown(resumen_html, unsafe_allow_html=True)
+    _rank_options = {"Sin ordenar (alfabético)": None}
+    for kk, kl in _kpi_cols:
+        _rank_options[f"🔽 {kl} (mayor → menor)"] = (kk, False)
+        _rank_options[f"🔼 {kl} (menor → mayor)"] = (kk, True)
+
+    col_rank, col_spacer = st.columns([3, 5])
+    with col_rank:
+        rank_sel = st.selectbox(
+            "Ordenar / Ranking por indicador",
+            list(_rank_options.keys()),
+            key="cumpl_ranking",
+        )
+
+    rank_cfg = _rank_options[rank_sel]
+    if rank_cfg is None:
+        df_resumen = df_resumen.sort_values("centro")
+    else:
+        sort_col, sort_asc = rank_cfg
+        df_resumen = df_resumen.sort_values(f"{sort_col}_valor", ascending=sort_asc)
+
+    # Agregar columna de posición (ranking)
+    df_resumen = df_resumen.reset_index(drop=True)
+    df_resumen["_rank"] = range(1, len(df_resumen) + 1)
+
+    # ── Función para generar HTML de tabla ────────────────────────────────
+    def _build_table_html(df_data, for_export=False):
+        """Genera HTML de la tabla. for_export=True usa estilos inline completos."""
+        _rows = []
+        for _, r in df_data.iterrows():
+            rank_num = int(r["_rank"])
+            cells = f"<td style='text-align:center; font-weight:700'>{rank_num}</td>"
+            cells += f"<td style='font-weight:600; white-space:nowrap'>{r['centro']}</td>"
+            cells += f"<td style='text-align:center'>{int(r['total']):,}</td>"
+            for kpi_key, _ in _kpi_cols:
+                val = r[f"{kpi_key}_valor"]
+                sem = r[f"{kpi_key}_semaforo"]
+                icon = _sem_icon.get(sem, "⚪")
+                bg = _sem_bg.get(sem, "")
+                unidad = KPI_DEFINITIONS.get(kpi_key, {}).get("unidad", "")
+                if unidad == "%":
+                    display = f"{val:.1f}%"
+                elif unidad == "min":
+                    display = f"{val:.1f}"
+                elif unidad == "pp":
+                    display = f"{val:.1f}"
+                else:
+                    display = f"{val:.1f}"
+                cells += f"<td style='text-align:center; {bg}'>{icon} {display}</td>"
+            _rows.append(f"<tr>{cells}</tr>")
+
+        _th = "<th style='white-space:nowrap; text-align:center'>#</th>"
+        _th += "<th style='white-space:nowrap'>Centro de Salud</th><th>Registros</th>"
+        for _, label in _kpi_cols:
+            _th += f"<th style='white-space:nowrap; text-align:center'>{label}</th>"
+
+        if for_export:
+            title = "Cumplimiento General — Todos los Centros de Salud"
+            sort_label = rank_sel if rank_cfg else "Alfabético"
+            return f"""<!DOCTYPE html>
+<html lang="es"><head><meta charset="utf-8">
+<title>{title}</title>
+<style>
+body {{ font-family: 'Segoe UI', Arial, sans-serif; margin: 2rem; color: #212529; }}
+h1 {{ color: #1a5276; font-size: 1.5rem; }}
+.meta {{ color: #6c757d; font-size: 0.85rem; margin-bottom: 1rem; }}
+table {{ border-collapse: collapse; width: 100%; font-size: 0.8rem; border: 1px solid #dee2e6; }}
+th {{ background: #343a40; color: #fff; padding: 8px 6px; white-space: nowrap; text-align: center; }}
+td {{ padding: 6px 8px; border-bottom: 1px solid #dee2e6; }}
+tr:nth-child(even) {{ background: #f8f9fa; }}
+.legend {{ margin-top: 1rem; font-size: 0.8rem; color: #495057; }}
+@media print {{ body {{ margin: 0.5cm; }} }}
+</style></head><body>
+<h1>🏥 {title}</h1>
+<p class="meta">Ordenamiento: {sort_label} · Generado: {pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')}<br>
+SSMC · Sistema de Análisis de Productividad APS</p>
+<table>
+<thead><tr>{_th}</tr></thead>
+<tbody>{"".join(_rows)}</tbody>
+</table>
+<p class="legend">🟢 Dentro de meta · 🟡 Zona de observación · 🔴 Brecha crítica · ⚪ Sin umbral definido</p>
+</body></html>"""
+        else:
+            return f"""<div style="overflow-x:auto; margin-bottom:1.5rem;">
+<table style="border-collapse:collapse; width:100%; font-size:0.85rem; border:1px solid #dee2e6;">
+<thead><tr style="background:#343a40; color:#fff;">{_th}</tr></thead>
+<tbody>{"".join(_rows)}</tbody>
+</table></div>"""
+
+    # ── Mostrar tabla ─────────────────────────────────────────────────────
+    st.markdown(_build_table_html(df_resumen, for_export=False), unsafe_allow_html=True)
 
     # ── Resumen estadístico ───────────────────────────────────────────────
     n_centros = len(df_resumen)
@@ -2381,6 +2438,64 @@ def page_cumplimiento_general():
         f"📊 {n_centros} centros · {total_eval} evaluaciones · "
         f"🟢 {n_verde} en meta · 🟡 {n_amarillo} en observación · 🔴 {n_rojo} en brecha crítica"
     )
+
+    # ── Botones de descarga ───────────────────────────────────────────────
+    st.markdown("---")
+    st.markdown("### 📥 Exportar Tabla de Cumplimiento")
+
+    col_dl1, col_dl2, col_dl3 = st.columns(3)
+
+    # 1) Excel
+    with col_dl1:
+        import io as _io
+        excel_rows = []
+        for _, r in df_resumen.iterrows():
+            erow = {"#": int(r["_rank"]), "Centro de Salud": r["centro"], "Registros": int(r["total"])}
+            for kpi_key, kpi_label in _kpi_cols:
+                val = r[f"{kpi_key}_valor"]
+                sem = r[f"{kpi_key}_semaforo"]
+                sem_txt = {"verde": "VERDE", "amarillo": "AMARILLO", "rojo": "ROJO", "gris": "—"}.get(sem, "—")
+                unidad = KPI_DEFINITIONS.get(kpi_key, {}).get("unidad", "")
+                erow[kpi_label] = f"{val:.1f}{unidad}" if unidad != "min" else f"{val:.1f}"
+                erow[f"{kpi_label} Estado"] = sem_txt
+            excel_rows.append(erow)
+        df_excel = pd.DataFrame(excel_rows)
+        buf_xl = _io.BytesIO()
+        with pd.ExcelWriter(buf_xl, engine="openpyxl") as writer:
+            df_excel.to_excel(writer, index=False, sheet_name="Cumplimiento")
+        st.download_button(
+            "📊 Descargar Excel",
+            data=buf_xl.getvalue(),
+            file_name="cumplimiento_general_centros.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        )
+
+    # 2) HTML (para imprimir)
+    with col_dl2:
+        html_export = _build_table_html(df_resumen, for_export=True)
+        st.download_button(
+            "🖨️ Descargar HTML (imprimir)",
+            data=html_export.encode("utf-8"),
+            file_name="cumplimiento_general_centros.html",
+            mime="text/html",
+        )
+
+    # 3) CSV
+    with col_dl3:
+        csv_rows = []
+        for _, r in df_resumen.iterrows():
+            crow = {"#": int(r["_rank"]), "Centro": r["centro"], "Registros": int(r["total"])}
+            for kpi_key, kpi_label in _kpi_cols:
+                crow[kpi_label] = r[f"{kpi_key}_valor"]
+                crow[f"{kpi_label} Semáforo"] = r[f"{kpi_key}_semaforo"]
+            csv_rows.append(crow)
+        df_csv = pd.DataFrame(csv_rows)
+        st.download_button(
+            "📄 Descargar CSV",
+            data=df_csv.to_csv(index=False).encode("utf-8"),
+            file_name="cumplimiento_general_centros.csv",
+            mime="text/csv",
+        )
 
     # ── Leyenda de umbrales ───────────────────────────────────────────────
     with st.expander("📖 Umbrales y definiciones de cada indicador"):

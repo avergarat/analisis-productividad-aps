@@ -440,6 +440,7 @@ def page_inicio():
                         n_nuevos = len(df_nuevos)
 
                         # ── Guardar en BigQuery (almacén primario) ───────────
+                        ok_bq = False
                         if bq.bq_configured():
                             with st.spinner("Guardando en BigQuery..."):
                                 ok_bq, msg_bq = bq.insert_data(df_nuevos)
@@ -448,6 +449,18 @@ def page_inicio():
                                 st.session_state.bq_filter_options = bq.get_filter_options()
                                 st.session_state.bq_total_registros = bq.get_record_count()
                                 st.info(msg_bq, icon="🗄️")
+                                # Verificación de integridad post-carga
+                                n_bq_after = st.session_state.bq_total_registros
+                                if n_bq_after < n_nuevos:
+                                    st.warning(
+                                        f"⚠️ **Verificación de integridad**: se procesaron "
+                                        f"**{n_nuevos:,}** registros pero BigQuery reporta "
+                                        f"**{n_bq_after:,}** en total. Posible pérdida de "
+                                        f"**{n_nuevos - n_bq_after:,}** registros durante la "
+                                        f"carga. Intente eliminar los datos en BigQuery y "
+                                        f"re-subir el archivo.",
+                                        icon="⚠️"
+                                    )
                             else:
                                 st.warning(f"BigQuery: {msg_bq}", icon="⚠️")
 
@@ -2848,11 +2861,48 @@ def _generar_pdf_informe(
     fecha_gen = datetime.now().strftime("%d/%m/%Y %H:%M")
 
     # ── Helper: Plotly fig → PNG bytes ────────────────────────────────────────
+    _kaleido_ok = True  # flag para evitar reintentos costosos si falló
+
     def _fig_to_png(fig, w=900, h=450):
-        fig.update_layout(width=w, height=h, template="plotly_white")
+        nonlocal _kaleido_ok
+        # Asegurar etiquetas de datos visibles en todas las trazas
+        for trace in fig.data:
+            ttype = trace.type
+            if ttype in ("bar", "scatter", "waterfall"):
+                if trace.text is not None and not getattr(trace, "textposition", None):
+                    trace.textposition = "outside"
+                if trace.text is not None:
+                    trace.textfont = dict(size=11)
+            elif ttype == "pie":
+                trace.textinfo = "label+percent+value"
+                trace.textfont = dict(size=11)
+
+        fig.update_layout(
+            width=w, height=h, template="plotly_white",
+            paper_bgcolor="white", plot_bgcolor="white",
+        )
+        if not _kaleido_ok:
+            return None
+
+        # Intento 1: kaleido con escala 2 (alta calidad)
         try:
             return fig.to_image(format="png", scale=2, engine="kaleido")
         except Exception:
+            pass
+
+        # Intento 2: kaleido sin especificar escala
+        try:
+            return fig.to_image(format="png", engine="kaleido")
+        except Exception:
+            pass
+
+        # Intento 3: sin especificar engine (plotly auto-detect)
+        try:
+            return fig.to_image(format="png", scale=2)
+        except Exception as e:
+            import logging
+            logging.warning(f"PDF chart export failed: {e}")
+            _kaleido_ok = False
             return None
 
     # ── Helper: semáforo ──────────────────────────────────────────────────────
@@ -2928,8 +2978,22 @@ def _generar_pdf_informe(
             self.multi_cell(0, 5, txt)
             self.ln(2)
 
-        def add_chart(self, png_bytes, w=180):
+        def add_chart(self, png_bytes, w=180, title_hint=""):
             if png_bytes is None:
+                # Placeholder cuando kaleido no pudo renderizar
+                y = self.get_y()
+                self.set_fill_color(245, 245, 245)
+                self.set_draw_color(200, 200, 200)
+                self.rect(15, y, 180, 25, "FD")
+                self.set_font("Helvetica", "I", 9)
+                self.set_text_color(130, 130, 130)
+                self.set_xy(15, y + 5)
+                msg = f"[Grafico no disponible"
+                if title_hint:
+                    msg += f": {title_hint}"
+                msg += " — instale kaleido: pip install kaleido]"
+                self.cell(180, 8, msg, align="C")
+                self.set_y(y + 28)
                 return
             img_stream = io.BytesIO(png_bytes)
             x = (210 - w) / 2
@@ -3167,10 +3231,22 @@ def _generar_pdf_informe(
     charts_png["sector"] = _fig_to_png(fig8, 850, 400)
 
     fig9 = chart_tipo_atencion(df_centro, top_n=15)
+    # Agregar etiquetas de datos para PDF
+    for trace in fig9.data:
+        if trace.type == "bar" and trace.text is None:
+            trace.text = [f"{v:,.0f}" for v in (trace.x if trace.orientation == "h" else trace.y)]
+            trace.textposition = "outside"
     charts_png["tipo_atencion"] = _fig_to_png(fig9, 850, 480)
 
     if not df_meses_c.empty and len(df_meses_c) >= 2:
         fig10 = chart_multi_kpi(df_meses_c)
+        # Agregar etiquetas de datos a cada serie para PDF
+        for trace in fig10.data:
+            if trace.type == "scatter" and trace.y is not None:
+                trace.mode = "lines+markers+text"
+                trace.text = [f"{v:.1f}%" for v in trace.y]
+                trace.textposition = "top center"
+                trace.textfont = dict(size=9)
         charts_png["multi_kpi"] = _fig_to_png(fig10, 850, 430)
 
     if "MES_NUM" in df_centro.columns and "INSTRUMENTO" in df_centro.columns:
@@ -3268,7 +3344,7 @@ def _generar_pdf_informe(
         "Composicion de cupos segun estado final (Citado, Disponible, Bloqueado). "
         "Muestra que proporcion de la oferta programada fue efectivamente utilizada."
     )
-    pdf.add_chart(charts_png.get("cupos"))
+    pdf.add_chart(charts_png.get("cupos"), title_hint="Estado de Cupos")
 
     # ── Sección 4: Tasa de Ocupación ──────────────────────────────────────────
     v_ocu = kpis.get("ocupacion", {}).get("valor", 0)
@@ -3278,13 +3354,11 @@ def _generar_pdf_informe(
         f"disponible: Citados / (Citados + Disponibles) x 100. El centro registra una "
         f"ocupacion de {v_ocu:.1f}% ({_sem_text(v_ocu, 'ocupacion')}). Meta >= 65%, alerta < 50%."
     )
-    if charts_png.get("ocu_mensual"):
-        pdf.add_chart(charts_png["ocu_mensual"])
+    pdf.add_chart(charts_png.get("ocu_mensual"), title_hint="Ocupacion Mensual")
 
-    if charts_png.get("ocu_inst"):
-        if pdf.get_y() > 160:
-            pdf.add_page()
-        pdf.add_chart(charts_png["ocu_inst"])
+    if pdf.get_y() > 160:
+        pdf.add_page()
+    pdf.add_chart(charts_png.get("ocu_inst"), title_hint="Ocupacion por Instrumento")
 
     # ── Sección 5: No-Show ────────────────────────────────────────────────────
     v_ns = kpis.get("no_show", {}).get("valor", 0)
@@ -3295,8 +3369,7 @@ def _generar_pdf_informe(
         f"(Citados - Completados) / Citados x 100. El centro presenta un No-Show de "
         f"{v_ns:.1f}% ({_sem_text(v_ns, 'no_show')}). Meta <= 10%, alerta > 15%."
     )
-    if charts_png.get("noshow"):
-        pdf.add_chart(charts_png["noshow"])
+    pdf.add_chart(charts_png.get("noshow"), title_hint="No-Show Mensual")
 
     # ── Sección 6: Bloqueo ────────────────────────────────────────────────────
     v_bloq = kpis.get("bloqueo", {}).get("valor", 0)
@@ -3306,8 +3379,7 @@ def _generar_pdf_informe(
         f"Bloqueados / Total x 100. El centro registra {v_bloq:.1f}% "
         f"({_sem_text(v_bloq, 'bloqueo')}). Meta <= 10%, alerta > 15%."
     )
-    if charts_png.get("bloqueo"):
-        pdf.add_chart(charts_png["bloqueo"])
+    pdf.add_chart(charts_png.get("bloqueo"), title_hint="Tasa de Bloqueo")
 
     # ── Sección 7: Efectividad ────────────────────────────────────────────────
     v_efec = kpis.get("efectividad", {}).get("valor", 0)
@@ -3318,8 +3390,7 @@ def _generar_pdf_informe(
         f"Completados / Citados x 100. El centro alcanza {v_efec:.1f}% "
         f"({_sem_text(v_efec, 'efectividad')}). Meta >= 88%, alerta < 80%."
     )
-    if charts_png.get("efectividad"):
-        pdf.add_chart(charts_png["efectividad"])
+    pdf.add_chart(charts_png.get("efectividad"), title_hint="Efectividad de Cita")
 
     # ── Sección 8: Rendimiento ────────────────────────────────────────────────
     v_rend = kpis.get("rendimiento", {}).get("valor", 0)
@@ -3328,10 +3399,9 @@ def _generar_pdf_informe(
         f"El Rendimiento Promedio indica los minutos promedio por atencion: "
         f"Promedio(RENDIMIENTO). El centro presenta {v_rend:.1f} min/atencion."
     )
-    if charts_png.get("rendimiento"):
-        if pdf.get_y() > 140:
-            pdf.add_page()
-        pdf.add_chart(charts_png["rendimiento"])
+    if pdf.get_y() > 140:
+        pdf.add_page()
+    pdf.add_chart(charts_png.get("rendimiento"), title_hint="Rendimiento por Instrumento")
 
     # ── Sección 9: Sobrecupo ─────────────────────────────────────────────────
     v_sobre = kpis.get("sobrecupo", {}).get("valor", 0)
@@ -3351,8 +3421,7 @@ def _generar_pdf_informe(
         f"Con sector / Total x 100. Cobertura: {v_cob:.1f}% "
         f"({_sem_text(v_cob, 'cobertura_sectorial')}). Meta >= 80%, alerta < 60%."
     )
-    if charts_png.get("sector"):
-        pdf.add_chart(charts_png["sector"])
+    pdf.add_chart(charts_png.get("sector"), title_hint="Distribucion Sectorial")
 
     # ── Sección 11: Agendamiento Remoto ───────────────────────────────────────
     v_ag = kpis.get("agendamiento_remoto", {}).get("valor", 0)
@@ -3380,8 +3449,7 @@ def _generar_pdf_informe(
         "Volumen de cupos por tipo de atencion (Morbilidad, Control, Urgencia, etc.). "
         "Identifica la composicion de la cartera de servicios del centro."
     )
-    if charts_png.get("tipo_atencion"):
-        pdf.add_chart(charts_png["tipo_atencion"])
+    pdf.add_chart(charts_png.get("tipo_atencion"), title_hint="Tipo de Atencion")
 
     # Tabla tipo atención
     if not df_kpis_ta.empty:
@@ -3424,24 +3492,22 @@ def _generar_pdf_informe(
                     align_cols=["L", "R", "R", "R", "R", "R", "C", "C", "C", "C"])
 
     # ── Sección 15: Multi-KPI ─────────────────────────────────────────────────
-    if charts_png.get("multi_kpi"):
-        pdf.add_page()
-        pdf.section_title(15, "Evolucion Conjunta de KPIs Principales")
-        pdf.body_text(
-            "Ocupacion, No-Show y Bloqueo mes a mes. Visualiza la interaccion: un aumento "
-            "de bloqueo tipicamente reduce la ocupacion; un No-Show elevado reduce la efectividad."
-        )
-        pdf.add_chart(charts_png["multi_kpi"])
+    pdf.add_page()
+    pdf.section_title(15, "Evolucion Conjunta de KPIs Principales")
+    pdf.body_text(
+        "Ocupacion, No-Show y Bloqueo mes a mes. Visualiza la interaccion: un aumento "
+        "de bloqueo tipicamente reduce la ocupacion; un No-Show elevado reduce la efectividad."
+    )
+    pdf.add_chart(charts_png.get("multi_kpi"), title_hint="Multi-KPI Mensual")
 
     # ── Sección 16: Heatmap ───────────────────────────────────────────────────
-    if charts_png.get("heatmap"):
-        pdf.add_page()
-        pdf.section_title(16, "Mapa de Calor: Ocupacion por Instrumento y Mes")
-        pdf.body_text(
-            "Cruza cada instrumento (fila) con cada mes (columna), coloreando segun "
-            "la tasa de ocupacion. Tonos verdes >= 65%, amarillos zona intermedia, rojos criticos."
-        )
-        pdf.add_chart(charts_png["heatmap"])
+    pdf.add_page()
+    pdf.section_title(16, "Mapa de Calor: Ocupacion por Instrumento y Mes")
+    pdf.body_text(
+        "Cruza cada instrumento (fila) con cada mes (columna), coloreando segun "
+        "la tasa de ocupacion. Tonos verdes >= 65%, amarillos zona intermedia, rojos criticos."
+    )
+    pdf.add_chart(charts_png.get("heatmap"), title_hint="Heatmap Instrumento-Mes")
 
     # ── Sección 17: Alertas ───────────────────────────────────────────────────
     pdf.add_page()

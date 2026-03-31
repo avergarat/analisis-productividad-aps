@@ -227,13 +227,23 @@ def insert_data(df: pd.DataFrame) -> tuple[bool, str]:
                 ).result()
 
         df_bq = _to_bq(df)
+        n_source = len(df)
+        n_bq_ready = len(df_bq)
         job_config = bigquery.LoadJobConfig(
             write_disposition=bigquery.WriteDisposition.WRITE_APPEND,
             schema=[bigquery.SchemaField(n, t) for n, t in _SCHEMA],
         )
         job = client.load_table_from_dataframe(df_bq, _full_table_id(), job_config=job_config)
-        job.result()
-        return True, f"✅ {len(df):,} registros guardados en BigQuery."
+        result = job.result()
+
+        # Verificar filas efectivamente cargadas
+        n_loaded = result.output_rows if hasattr(result, "output_rows") and result.output_rows else n_bq_ready
+        if n_loaded < n_source:
+            return True, (
+                f"⚠️ {n_loaded:,} de {n_source:,} registros cargados en BigQuery "
+                f"({n_source - n_loaded:,} posiblemente perdidos en conversión)."
+            )
+        return True, f"✅ {n_source:,} registros guardados en BigQuery."
     except Exception as e:
         return False, f"Error BigQuery al insertar: {e}"
 

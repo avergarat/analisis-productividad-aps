@@ -1975,7 +1975,11 @@ def page_analisis(dff: pd.DataFrame):
             with _seg_tab_sab:
                 df_det_sab = detalle_profesional_segmento(dff, segmento="sabado")
                 if df_det_sab.empty:
-                    st.info("No hay registros de Apertura Sabatina en los datos filtrados.")
+                    st.warning(
+                        "No se encontraron registros detallados de Apertura Sabatina. "
+                        "Si los datos fueron cargados antes de la actualización, "
+                        "**re-suba los archivos IRIS** para incorporar la columna PROFESIONAL."
+                    )
                 else:
                     # Filtros
                     _fc1, _fc2, _fc3 = st.columns(3)
@@ -2014,7 +2018,11 @@ def page_analisis(dff: pd.DataFrame):
             with _seg_tab_ext:
                 df_det_ext = detalle_profesional_segmento(dff, segmento="extendido")
                 if df_det_ext.empty:
-                    st.info("No hay registros de Horario Extendido (Lun-Vie ≥ 18h) en los datos filtrados.")
+                    st.warning(
+                        "No se encontraron registros detallados de Horario Extendido. "
+                        "Si los datos fueron cargados antes de la actualización, "
+                        "**re-suba los archivos IRIS** para incorporar la columna PROFESIONAL."
+                    )
                 else:
                     _fe1, _fe2, _fe3 = st.columns(3)
                     _profs_ext = sorted(df_det_ext["profesional"].unique())
@@ -3323,6 +3331,20 @@ def _generar_pdf_informe(
     ROJO = (231, 76, 60)
 
     # ── Clase PDF personalizada ───────────────────────────────────────────────
+    # Reemplazos de caracteres Unicode no soportados por Helvetica
+    _PDF_UNICODE_MAP = str.maketrans({
+        "\u2265": ">=", "\u2264": "<=", "\u00d7": "x", "\u00f7": "/",
+        "\u2013": "-", "\u2014": "--", "\u2018": "'", "\u2019": "'",
+        "\u201c": '"', "\u201d": '"', "\u2026": "...", "\u00b7": ".",
+        "\u00e1": "a", "\u00e9": "e", "\u00ed": "i", "\u00f3": "o", "\u00fa": "u",
+        "\u00c1": "A", "\u00c9": "E", "\u00cd": "I", "\u00d3": "O", "\u00da": "U",
+        "\u00f1": "n", "\u00d1": "N",
+    })
+
+    def _pdf_safe(txt: str) -> str:
+        """Reemplaza caracteres Unicode no soportados por Helvetica."""
+        return str(txt).translate(_PDF_UNICODE_MAP)
+
     class InformePDF(FPDF):
         def __init__(self):
             super().__init__(orientation="P", unit="mm", format="A4")
@@ -3338,7 +3360,7 @@ def _generar_pdf_informe(
             self.set_font("Helvetica", "B", 7)
             self.set_text_color(*BLANCO)
             self.set_xy(10, 3)
-            self.cell(0, 5, f"Informe de Productividad APS  |  {centro_sel}  |  {rango_meses}", align="L")
+            self.cell(0, 5, _pdf_safe(f"Informe de Productividad APS  |  {centro_sel}  |  {rango_meses}"), align="L")
             self.set_xy(0, 3)
             self.cell(200, 5, f"Pag. {self.page_no()}", align="R")
             # Línea decorativa
@@ -3366,13 +3388,13 @@ def _generar_pdf_informe(
             self.set_fill_color(*AZUL_MEDIO)
             self.rect(10, y_start, 3, 8, "F")
             self.set_xy(16, y_start)
-            self.cell(0, 8, f"{num}. {title}")
+            self.cell(0, 8, _pdf_safe(f"{num}. {title}"))
             self.ln(12)
 
         def body_text(self, txt):
             self.set_font("Helvetica", "", 9)
             self.set_text_color(*GRIS_TEXTO)
-            self.multi_cell(0, 5, txt)
+            self.multi_cell(0, 5, _pdf_safe(txt))
             self.ln(2)
 
         def add_chart(self, png_bytes, w=180, title_hint=""):
@@ -3421,12 +3443,12 @@ def _generar_pdf_informe(
                 self.set_font("Helvetica", "B", 12)
                 self.set_text_color(*AZUL_OSCURO)
                 self.set_xy(x, y_start + 4)
-                self.cell(card_w, 7, str(val), align="C")
+                self.cell(card_w, 7, _pdf_safe(str(val)), align="C")
                 # Label
                 self.set_font("Helvetica", "", 6)
                 self.set_text_color(100, 100, 100)
                 self.set_xy(x, y_start + 12)
-                self.cell(card_w, 5, label, align="C")
+                self.cell(card_w, 5, _pdf_safe(label), align="C")
             self.set_y(y_start + 28)
 
     # ── Crear PDF ─────────────────────────────────────────────────────────────
@@ -3660,7 +3682,7 @@ def _generar_pdf_informe(
         pdf.set_text_color(*BLANCO)
         pdf.set_font("Helvetica", "B", 7)
         for i, h in enumerate(headers):
-            pdf.cell(col_widths[i], 7, h, border=1, align="C", fill=True)
+            pdf.cell(col_widths[i], 7, _pdf_safe(h), border=1, align="C", fill=True)
         pdf.ln()
 
     def _draw_table(headers, rows, col_widths=None, align_cols=None):
@@ -3691,7 +3713,7 @@ def _generar_pdf_informe(
             pdf.set_fill_color(*bg)
             pdf.set_text_color(*GRIS_TEXTO)
             for i, val in enumerate(row):
-                pdf.cell(col_widths[i], row_h, str(val), border=1, align=align_cols[i], fill=True)
+                pdf.cell(col_widths[i], row_h, _pdf_safe(str(val)), border=1, align=align_cols[i], fill=True)
             pdf.ln()
 
     # ══════════════════════════════════════════════════════════════════════════

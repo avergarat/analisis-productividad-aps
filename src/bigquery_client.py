@@ -150,6 +150,18 @@ def _ensure_table(client) -> None:
     tbl.clustering_fields = ["establecimiento", "tipo_atencion", "instrumento"]
     client.create_table(tbl, exists_ok=True)
 
+    # Agregar columnas nuevas a tabla existente (schema evolution)
+    try:
+        existing = client.get_table(_full_table_id())
+        existing_names = {f.name for f in existing.schema}
+        new_fields = [f for f in schema if f.name not in existing_names]
+        if new_fields:
+            updated_schema = list(existing.schema) + new_fields
+            existing.schema = updated_schema
+            client.update_table(existing, ["schema"])
+    except Exception:
+        pass  # Si falla, no bloquear la carga
+
 
 # ── Conversión DataFrame ↔ BigQuery ───────────────────────────────────────────
 

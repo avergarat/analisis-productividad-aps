@@ -247,13 +247,13 @@ def generar_html_informe(
         valor = k.get("valor", 0)
         unidad = k.get("unidad", "%")
         sem = k.get("semaforo", "gris")
-        meta = k.get("umbral_ok", "-")
-        alerta = k.get("umbral_alerta", "-")
+        meta = k.get("umbral_ok")
+        alerta = k.get("umbral_alerta")
         desc = k.get("descripcion", "")
         c = {"verde": "#27AE60", "amarillo": "#F39C12", "rojo": "#E74C3C"}.get(sem, "#95A5A6")
         bg = {"rojo": "#FDEDEC", "amarillo": "#FEF9E7", "verde": "#EAFAF1"}.get(sem, "#fff")
-        meta_s = f'{meta}{unidad}' if meta != "-" else "-"
-        alerta_s = f'{alerta}{unidad}' if alerta != "-" else "-"
+        meta_s = f'{meta}{unidad}' if meta is not None else "-"
+        alerta_s = f'{alerta}{unidad}' if alerta is not None else "-"
         kpi_rows_html += f'<tr style="background:{bg}"><td style="text-align:center"><span style="color:{c};font-size:1.4em">&#9679;</span></td><td><strong>{label}</strong></td><td style="text-align:center;font-weight:600">{valor:.1f} {unidad}</td><td style="text-align:center">{meta_s}</td><td style="text-align:center">{alerta_s}</td><td style="font-size:0.85em">{desc}</td></tr>\n'
 
     # ── Instrument table ──
@@ -1086,9 +1086,22 @@ def generar_pdf_informe(
             pdf.ln()
 
     # ═══ SEMAFORO TABLE HELPER (with colored dots) ═══
+    _KPI_FORMULA = {
+        "ocupacion": "Citados / (Citados + Disponibles) x 100",
+        "no_show": "(Citados - Completados) / Citados x 100",
+        "bloqueo": "Bloqueados / Total x 100",
+        "efectividad": "Completados / Citados x 100",
+        "rendimiento": "Promedio minutos por atencion",
+        "sobrecupo": "Sobrecupos / Total x 100",
+        "cobertura_sectorial": "Registros con sector / Total x 100",
+        "agendamiento_remoto": "(Telefonico + Telesalud) / Total x 100",
+        "variacion_mensual": "Cambio mes a mes en tasa de ocupacion (pp)",
+        "ocupacion_extendida": "Citados >=18h / (Citados+Disp >=18h) x 100",
+    }
+
     def _draw_semaforo_table():
-        sem_headers = ["Estado", "Indicador", "Valor", "Meta", "Alerta", "Diagnostico"]
-        col_w = [14, 42, 22, 18, 18, 76]
+        sem_headers = ["Estado", "Indicador", "Valor", "Meta", "Alerta", "Calculo"]
+        col_w = [12, 38, 20, 16, 16, 88]
         table_w = sum(col_w)
         x_off = (210 - table_w) / 2
 
@@ -1108,9 +1121,9 @@ def generar_pdf_informe(
             valor = k.get("valor", 0)
             unidad = k.get("unidad", "%")
             sem = k.get("semaforo", "gris")
-            meta = k.get("umbral_ok", "-")
-            alerta = k.get("umbral_alerta", "-")
-            diag = _sem_t(valor, key)
+            meta = k.get("umbral_ok")
+            alerta = k.get("umbral_alerta")
+            formula = _KPI_FORMULA.get(key, "")
 
             # Row background based on semaforo
             if sem == "rojo":
@@ -1142,11 +1155,13 @@ def generar_pdf_informe(
             pdf.cell(col_w[1], 7, _ps(label), border=1, align="L", fill=True)
             pdf.set_font("Helvetica", "", 7)
             pdf.cell(col_w[2], 7, f"{valor:.1f}{unidad}", border=1, align="C", fill=True)
-            meta_s = f"{meta}{unidad}" if meta != "-" else "-"
-            alerta_s = f"{alerta}{unidad}" if alerta != "-" else "-"
+            meta_s = f"{meta}{unidad}" if meta is not None else "-"
+            alerta_s = f"{alerta}{unidad}" if alerta is not None else "-"
             pdf.cell(col_w[3], 7, _ps(str(meta_s)), border=1, align="C", fill=True)
             pdf.cell(col_w[4], 7, _ps(str(alerta_s)), border=1, align="C", fill=True)
-            pdf.cell(col_w[5], 7, _ps(diag), border=1, align="L", fill=True)
+            pdf.set_font("Helvetica", "", 6)
+            pdf.cell(col_w[5], 7, _ps(formula), border=1, align="L", fill=True)
+            pdf.set_font("Helvetica", "", 7)
             pdf.ln()
 
     # ═══ CONTENT ═══

@@ -2317,6 +2317,32 @@ def page_cumplimiento_general():
         "rojo": "background-color: #f8d7da",
         "gris": "background-color: #e9ecef",
     }
+    _sem_score = {"verde": 3, "amarillo": 2, "rojo": 1, "gris": 0}
+
+    # ── Puntaje compuesto de desempeño ────────────────────────────────────
+    # Verde=3, Amarillo=2, Rojo=1, Gris=0 → máximo 30 pts (10 KPIs × 3)
+    _kpi_keys_score = [k for k, _ in _kpi_cols]
+    for idx, r in df_resumen.iterrows():
+        pts = sum(_sem_score.get(r[f"{k}_semaforo"], 0) for k in _kpi_keys_score)
+        # Excluir KPIs gris del máximo posible para no penalizar
+        n_evaluados = sum(1 for k in _kpi_keys_score if r[f"{k}_semaforo"] != "gris")
+        max_pts = n_evaluados * 3 if n_evaluados > 0 else 1
+        df_resumen.at[idx, "_puntaje"] = pts
+        df_resumen.at[idx, "_puntaje_pct"] = round((pts / max_pts) * 100, 1)
+        df_resumen.at[idx, "_n_verde"] = sum(1 for k in _kpi_keys_score if r[f"{k}_semaforo"] == "verde")
+        df_resumen.at[idx, "_n_amarillo"] = sum(1 for k in _kpi_keys_score if r[f"{k}_semaforo"] == "amarillo")
+        df_resumen.at[idx, "_n_rojo"] = sum(1 for k in _kpi_keys_score if r[f"{k}_semaforo"] == "rojo")
+
+    # Clasificación de desempeño
+    def _clasif(pct):
+        if pct >= 80:
+            return ("Destacado", "#28a745")
+        elif pct >= 60:
+            return ("Satisfactorio", "#17a2b8")
+        elif pct >= 40:
+            return ("En desarrollo", "#ffc107")
+        else:
+            return ("Crítico", "#dc3545")
 
     # ── Selector de ranking ───────────────────────────────────────────────
     st.markdown(
@@ -2325,7 +2351,10 @@ def page_cumplimiento_general():
         "🟢 dentro de meta · 🟡 observación · 🔴 brecha crítica · ⚪ sin umbral."
     )
 
-    _rank_options = {"Sin ordenar (alfabético)": None}
+    _rank_options = {
+        "⭐ Puntaje de Desempeño (mejor → peor)": ("_puntaje_pct", False),
+        "Sin ordenar (alfabético)": None,
+    }
     for kk, kl in _kpi_cols:
         _rank_options[f"🔽 {kl} (mayor → menor)"] = (kk, False)
         _rank_options[f"🔼 {kl} (menor → mayor)"] = (kk, True)
@@ -2343,7 +2372,8 @@ def page_cumplimiento_general():
         df_resumen = df_resumen.sort_values("centro")
     else:
         sort_col, sort_asc = rank_cfg
-        df_resumen = df_resumen.sort_values(f"{sort_col}_valor", ascending=sort_asc)
+        col_name = f"{sort_col}_valor" if sort_col != "_puntaje_pct" else sort_col
+        df_resumen = df_resumen.sort_values(col_name, ascending=sort_asc)
 
     # Agregar columna de posición (ranking)
     df_resumen = df_resumen.reset_index(drop=True)
@@ -2355,9 +2385,23 @@ def page_cumplimiento_general():
         _rows = []
         for _, r in df_data.iterrows():
             rank_num = int(r["_rank"])
+            pct = float(r["_puntaje_pct"])
+            clasif_label, clasif_color = _clasif(pct)
             cells = f"<td style='text-align:center; font-weight:700'>{rank_num}</td>"
             cells += f"<td style='font-weight:600; white-space:nowrap'>{r['centro']}</td>"
             cells += f"<td style='text-align:center'>{int(r['total']):,}</td>"
+            # Puntaje con barra de progreso
+            bar_w = max(pct, 2)
+            cells += (
+                f"<td style='text-align:center; min-width:110px'>"
+                f"<div style='background:#e9ecef; border-radius:4px; overflow:hidden; height:20px; position:relative'>"
+                f"<div style='background:{clasif_color}; width:{bar_w}%; height:100%'></div>"
+                f"<span style='position:absolute; top:1px; left:0; right:0; text-align:center; "
+                f"font-size:0.75rem; font-weight:700; color:#212529'>{pct:.0f}%</span>"
+                f"</div>"
+                f"<div style='font-size:0.65rem; color:{clasif_color}; font-weight:600; margin-top:1px'>{clasif_label}</div>"
+                f"</td>"
+            )
             for kpi_key, _ in _kpi_cols:
                 val = r[f"{kpi_key}_valor"]
                 sem = r[f"{kpi_key}_semaforo"]
@@ -2377,6 +2421,7 @@ def page_cumplimiento_general():
 
         _th = "<th style='white-space:nowrap; text-align:center'>#</th>"
         _th += "<th style='white-space:nowrap'>Centro de Salud</th><th>Registros</th>"
+        _th += "<th style='white-space:nowrap; text-align:center'>Desempeño</th>"
         for _, label in _kpi_cols:
             _th += f"<th style='white-space:nowrap; text-align:center'>{label}</th>"
 
@@ -2400,6 +2445,8 @@ tr:nth-child(even) {{ background: #f8f9fa; }}
 <h1>🏥 {title}</h1>
 <p class="meta">Ordenamiento: {sort_label} · Generado: {pd.Timestamp.now().strftime('%d/%m/%Y %H:%M')}<br>
 SSMC · Sistema de Análisis de Productividad APS</p>
+<p style="font-size:0.8rem; color:#495057; margin-bottom:0.5rem;"><strong>Puntaje de Desempeño:</strong> 🟢=3 pts · 🟡=2 pts · 🔴=1 pt · ⚪=0 pts → % sobre máximo posible<br>
+<strong>Clasificación:</strong> ≥80% Destacado · ≥60% Satisfactorio · ≥40% En desarrollo · &lt;40% Crítico</p>
 <table>
 <thead><tr>{_th}</tr></thead>
 <tbody>{"".join(_rows)}</tbody>
@@ -2450,7 +2497,18 @@ SSMC · Sistema de Análisis de Productividad APS</p>
         import io as _io
         excel_rows = []
         for _, r in df_resumen.iterrows():
-            erow = {"#": int(r["_rank"]), "Centro de Salud": r["centro"], "Registros": int(r["total"])}
+            pct = float(r["_puntaje_pct"])
+            clasif_label, _ = _clasif(pct)
+            erow = {
+                "#": int(r["_rank"]),
+                "Centro de Salud": r["centro"],
+                "Registros": int(r["total"]),
+                "Puntaje Desempeño (%)": pct,
+                "Clasificación": clasif_label,
+                "🟢 Verdes": int(r["_n_verde"]),
+                "🟡 Amarillos": int(r["_n_amarillo"]),
+                "🔴 Rojos": int(r["_n_rojo"]),
+            }
             for kpi_key, kpi_label in _kpi_cols:
                 val = r[f"{kpi_key}_valor"]
                 sem = r[f"{kpi_key}_semaforo"]
@@ -2484,7 +2542,15 @@ SSMC · Sistema de Análisis de Productividad APS</p>
     with col_dl3:
         csv_rows = []
         for _, r in df_resumen.iterrows():
-            crow = {"#": int(r["_rank"]), "Centro": r["centro"], "Registros": int(r["total"])}
+            pct = float(r["_puntaje_pct"])
+            clasif_label, _ = _clasif(pct)
+            crow = {
+                "#": int(r["_rank"]),
+                "Centro": r["centro"],
+                "Registros": int(r["total"]),
+                "Puntaje Desempeño (%)": pct,
+                "Clasificación": clasif_label,
+            }
             for kpi_key, kpi_label in _kpi_cols:
                 crow[kpi_label] = r[f"{kpi_key}_valor"]
                 crow[f"{kpi_label} Semáforo"] = r[f"{kpi_key}_semaforo"]
@@ -2496,6 +2562,146 @@ SSMC · Sistema de Análisis de Productividad APS</p>
             file_name="cumplimiento_general_centros.csv",
             mime="text/csv",
         )
+
+    # ══════════════════════════════════════════════════════════════════════
+    # BENCHMARK: Gráfico de dispersión comparativo entre centros
+    # ══════════════════════════════════════════════════════════════════════
+    st.markdown("---")
+    st.markdown("### 📊 Benchmark Comparativo entre Centros")
+    st.markdown(
+        "Selecciona dos indicadores para los ejes y compara el posicionamiento "
+        "de cada centro. El tamaño de la burbuja refleja el **puntaje de desempeño** global. "
+        "Las líneas punteadas indican los umbrales de meta."
+    )
+
+    import plotly.graph_objects as go
+
+    _bench_kpis = [(k, l) for k, l in _kpi_cols if k != "rendimiento"]
+
+    col_x, col_y = st.columns(2)
+    with col_x:
+        eje_x_sel = st.selectbox(
+            "Eje X", [l for _, l in _bench_kpis],
+            index=0, key="bench_eje_x",
+        )
+    with col_y:
+        default_y = min(3, len(_bench_kpis) - 1)
+        eje_y_sel = st.selectbox(
+            "Eje Y", [l for _, l in _bench_kpis],
+            index=default_y, key="bench_eje_y",
+        )
+
+    _label_to_key = {l: k for k, l in _bench_kpis}
+    kx = _label_to_key[eje_x_sel]
+    ky = _label_to_key[eje_y_sel]
+
+    # Colores por clasificación de desempeño
+    _clasif_colors = {
+        "Destacado": "#28a745",
+        "Satisfactorio": "#17a2b8",
+        "En desarrollo": "#ffc107",
+        "Crítico": "#dc3545",
+    }
+
+    fig_bench = go.Figure()
+
+    for _, r in df_resumen.iterrows():
+        vx = r[f"{kx}_valor"]
+        vy = r[f"{ky}_valor"]
+        pct = float(r["_puntaje_pct"])
+        clasif_label, clasif_color = _clasif(pct)
+        centro_name = r["centro"]
+        # Tamaño proporcional al puntaje (min 12, max 50)
+        marker_size = max(12, min(50, pct * 0.5))
+
+        fig_bench.add_trace(go.Scatter(
+            x=[vx], y=[vy],
+            mode="markers+text",
+            marker=dict(
+                size=marker_size,
+                color=clasif_color,
+                opacity=0.85,
+                line=dict(width=1.5, color="#fff"),
+            ),
+            text=[centro_name.split("]")[-1].strip()[:20] if "]" in centro_name else centro_name[:20]],
+            textposition="top center",
+            textfont=dict(size=10),
+            hovertemplate=(
+                f"<b>{centro_name}</b><br>"
+                f"{eje_x_sel}: {vx:.1f}<br>"
+                f"{eje_y_sel}: {vy:.1f}<br>"
+                f"Desempeño: {pct:.0f}% ({clasif_label})<br>"
+                f"<extra></extra>"
+            ),
+            showlegend=False,
+        ))
+
+    # Líneas de umbral (meta)
+    defn_x = KPI_DEFINITIONS.get(kx, {})
+    defn_y = KPI_DEFINITIONS.get(ky, {})
+    umbral_x = defn_x.get("umbral_ok")
+    umbral_y = defn_y.get("umbral_ok")
+    unidad_x = defn_x.get("unidad", "")
+    unidad_y = defn_y.get("unidad", "")
+
+    if umbral_x is not None:
+        fig_bench.add_vline(
+            x=umbral_x, line_dash="dot", line_color="#28a745", line_width=1.5,
+            annotation_text=f"Meta {eje_x_sel}: {umbral_x}{unidad_x}",
+            annotation_position="top",
+            annotation_font_size=10,
+            annotation_font_color="#28a745",
+        )
+    if umbral_y is not None:
+        fig_bench.add_hline(
+            y=umbral_y, line_dash="dot", line_color="#28a745", line_width=1.5,
+            annotation_text=f"Meta {eje_y_sel}: {umbral_y}{unidad_y}",
+            annotation_position="right",
+            annotation_font_size=10,
+            annotation_font_color="#28a745",
+        )
+
+    # Promedios de la red (benchmark)
+    avg_x = df_resumen[f"{kx}_valor"].mean()
+    avg_y = df_resumen[f"{ky}_valor"].mean()
+    fig_bench.add_vline(
+        x=avg_x, line_dash="dash", line_color="#6c757d", line_width=1,
+        annotation_text=f"Promedio: {avg_x:.1f}",
+        annotation_position="bottom",
+        annotation_font_size=9,
+        annotation_font_color="#6c757d",
+    )
+    fig_bench.add_hline(
+        y=avg_y, line_dash="dash", line_color="#6c757d", line_width=1,
+        annotation_text=f"Promedio: {avg_y:.1f}",
+        annotation_position="left",
+        annotation_font_size=9,
+        annotation_font_color="#6c757d",
+    )
+
+    fig_bench.update_layout(
+        xaxis_title=f"{eje_x_sel} ({unidad_x})" if unidad_x else eje_x_sel,
+        yaxis_title=f"{eje_y_sel} ({unidad_y})" if unidad_y else eje_y_sel,
+        height=550,
+        template="plotly_white",
+        margin=dict(t=30, b=60, l=60, r=30),
+        font=dict(family="Segoe UI, sans-serif"),
+    )
+
+    st.plotly_chart(fig_bench, use_container_width=True)
+
+    # Leyenda del gráfico
+    _legend_items = " · ".join(
+        f"<span style='color:{c}; font-weight:700'>●</span> {lab}"
+        for lab, c in _clasif_colors.items()
+    )
+    st.markdown(
+        f"<div style='font-size:0.8rem; color:#495057; text-align:center'>"
+        f"Tamaño = puntaje de desempeño · {_legend_items} · "
+        f"<span style='color:#6c757d'>--- Promedio red</span> · "
+        f"<span style='color:#28a745'>··· Meta</span></div>",
+        unsafe_allow_html=True,
+    )
 
     # ── Leyenda de umbrales ───────────────────────────────────────────────
     with st.expander("📖 Umbrales y definiciones de cada indicador"):
@@ -2514,6 +2720,34 @@ SSMC · Sistema de Análisis de Productividad APS</p>
                 f"**{label}**: {desc}  \n"
                 f"🟢 Meta: ≤{ok_str} · 🟡 Alerta: ≤{alerta_str} · 🔴 Brecha"
             )
+
+    # ── Metodología del puntaje ───────────────────────────────────────────
+    with st.expander("📐 Metodología del Puntaje de Desempeño"):
+        st.markdown("""
+**Cálculo del Puntaje Compuesto**
+
+Cada indicador se evalúa según su semáforo y recibe una puntuación:
+
+| Semáforo | Puntos | Significado |
+|----------|--------|-------------|
+| 🟢 Verde | 3 | Dentro de meta |
+| 🟡 Amarillo | 2 | Zona de observación |
+| 🔴 Rojo | 1 | Brecha crítica |
+| ⚪ Gris | 0 | Sin umbral (excluido del cálculo) |
+
+**Fórmula:** `Puntaje (%) = (Σ puntos obtenidos / Σ puntos posibles) × 100`
+
+Los indicadores sin umbral definido (gris) se excluyen del denominador para no penalizar.
+
+**Clasificación de Desempeño:**
+- **≥ 80%** → Destacado
+- **≥ 60%** → Satisfactorio
+- **≥ 40%** → En desarrollo
+- **< 40%** → Crítico
+
+**Benchmark:** Las líneas punteadas verdes muestran la meta establecida. Las líneas grises discontinuas muestran el promedio de todos los centros (benchmark de la red).
+Centros en el cuadrante superior-derecho (para indicadores "mayor es mejor") superan ambas metas.
+        """)
 
 
 # ─────────────────────────────────────────────────────────────

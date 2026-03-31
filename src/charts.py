@@ -286,11 +286,29 @@ def chart_sector(df: pd.DataFrame) -> go.Figure:
         return go.Figure()
 
     counts = df["SECTOR"].value_counts()
-    sector_colors = {
+
+    # Paleta extendida: colores conocidos + generación dinámica para sectores nuevos
+    _SECTOR_KNOWN = {
         "VERDE": "#27AE60", "LILA": "#8E44AD", "ROJO": "#E74C3C",
-        "NO INFORMADO": "#95A5A6"
+        "AMARILLO": "#F1C40F", "AZUL": "#2E86C1", "BLANCO": "#BDC3C7",
+        "NARANJO": "#E67E22", "CELESTE": "#5DADE2", "ROSADO": "#EC7063",
+        "NO INFORMADO": "#95A5A6",
     }
-    colors = [sector_colors.get(s, COLORS["gris"]) for s in counts.index]
+    _PALETTE_EXTRA = [
+        "#1ABC9C", "#3498DB", "#9B59B6", "#E74C3C", "#F39C12",
+        "#16A085", "#2980B9", "#8E44AD", "#C0392B", "#D35400",
+        "#27AE60", "#2C3E50", "#7F8C8D", "#1F618D", "#A93226",
+        "#117A65", "#B7950B", "#6C3483", "#1A5276", "#A04000",
+    ]
+    extra_idx = 0
+    colors = []
+    for s in counts.index:
+        s_upper = str(s).strip().upper()
+        if s_upper in _SECTOR_KNOWN:
+            colors.append(_SECTOR_KNOWN[s_upper])
+        else:
+            colors.append(_PALETTE_EXTRA[extra_idx % len(_PALETTE_EXTRA)])
+            extra_idx += 1
 
     fig = go.Figure(go.Pie(
         labels=counts.index,

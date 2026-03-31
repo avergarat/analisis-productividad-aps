@@ -563,29 +563,7 @@ def kpis_por_profesional(df: pd.DataFrame) -> pd.DataFrame:
     if "PROFESIONAL" not in df.columns or df.empty:
         return pd.DataFrame()
 
-    rows = []
-    for prof, grp in df.groupby("PROFESIONAL", observed=True):
-        if str(prof).strip() in ("", "Sin profesional", "nan"):
-            continue
-        citados = int((grp["ESTADO CUPO"] == "CITADO").sum())
-        disponibles = int((grp["ESTADO CUPO"] == "DISPONIBLE").sum())
-        bloqueados = int((grp["ESTADO CUPO"] == "BLOQUEADO").sum())
-        completados = int((grp["ESTADO CITA"] == "Completado").sum()) if "ESTADO CITA" in grp.columns else 0
-        rows.append({
-            "profesional": str(prof),
-            "total": len(grp),
-            "citados": citados,
-            "disponibles": disponibles,
-            "bloqueados": bloqueados,
-            "completados": completados,
-            "ocupacion": calc_ocupacion(grp),
-            "no_show": calc_no_show(grp),
-            "bloqueo": calc_bloqueo(grp),
-            "efectividad": calc_efectividad(grp),
-            "rendimiento": calc_rendimiento(grp),
-        })
-
-    return pd.DataFrame(rows).sort_values("total", ascending=False)
+    return _kpis_prof_impl(df)
 
 
 @_cache
@@ -601,7 +579,7 @@ def kpis_profesional_sabatino(df: pd.DataFrame) -> pd.DataFrame:
     if df_sab.empty:
         return pd.DataFrame()
 
-    return kpis_por_profesional.__wrapped__(df_sab) if hasattr(kpis_por_profesional, "__wrapped__") else _kpis_prof_impl(df_sab)
+    return _kpis_prof_impl(df_sab)
 
 
 @_cache
@@ -626,12 +604,19 @@ def _kpis_prof_impl(sub: pd.DataFrame) -> pd.DataFrame:
     for prof, grp in sub.groupby("PROFESIONAL", observed=True):
         if str(prof).strip() in ("", "Sin profesional", "nan"):
             continue
+        # Instrumento más frecuente del profesional
+        instr = ""
+        if "INSTRUMENTO" in grp.columns:
+            _mode = grp["INSTRUMENTO"].mode()
+            if not _mode.empty:
+                instr = str(_mode.iloc[0])
         citados = int((grp["ESTADO CUPO"] == "CITADO").sum())
         disponibles = int((grp["ESTADO CUPO"] == "DISPONIBLE").sum())
         bloqueados = int((grp["ESTADO CUPO"] == "BLOQUEADO").sum())
         completados = int((grp["ESTADO CITA"] == "Completado").sum()) if "ESTADO CITA" in grp.columns else 0
         rows.append({
             "profesional": str(prof),
+            "instrumento": instr,
             "total": len(grp),
             "citados": citados,
             "disponibles": disponibles,
@@ -654,7 +639,7 @@ def kpis_sabatino_por_mes(df: pd.DataFrame) -> pd.DataFrame:
     df_sab = df[df["APERTURA_SABATINA"] == "Sábado"]
     if df_sab.empty:
         return pd.DataFrame()
-    return kpis_por_mes.__wrapped__(df_sab) if hasattr(kpis_por_mes, "__wrapped__") else _kpis_mes_impl(df_sab)
+    return _kpis_mes_impl(df_sab)
 
 
 @_cache

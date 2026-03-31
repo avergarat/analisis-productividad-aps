@@ -1664,44 +1664,108 @@ def page_analisis(dff: pd.DataFrame):
                     )
                     st.plotly_chart(fig_c, width="stretch")
 
-            # ── Ocupación extendida por Instrumento ───────────────────
-            if not dff_ext.empty and "INSTRUMENTO" in dff_ext.columns:
-                st.markdown("##### Ocupación en Horario Extendido por Instrumento")
-                inst_ext = (
-                    dff_ext.groupby("INSTRUMENTO", observed=True)
-                    .apply(calc_ocupacion)
-                    .reset_index(name="ocupacion")
-                    .sort_values("ocupacion", ascending=False)
-                )
-                if not inst_ext.empty:
-                    colors_ie = [
-                        "#27AE60" if v >= 65 else "#F39C12" if v >= 50 else "#E74C3C"
-                        for v in inst_ext["ocupacion"]
-                    ]
-                    fig_ie = go.Figure(go.Bar(
-                        x=inst_ext["ocupacion"],
-                        y=inst_ext["INSTRUMENTO"].str[:30],
-                        orientation="h",
-                        marker_color=colors_ie,
-                        text=[f"{v:.1f}%" for v in inst_ext["ocupacion"]],
-                        textposition="outside",
-                        hovertemplate="<b>%{y}</b><br>Ocupación extendida: %{x:.1f}%<extra></extra>",
-                    ))
-                    fig_ie.add_vline(x=50, line_dash="dash", line_color="#F39C12",
-                                     annotation_text="Meta 50%")
-                    fig_ie.update_layout(
-                        title="Ocupación Horario Extendido por Instrumento (%)",
-                        template="plotly_white",
-                        height=max(350, len(inst_ext) * 32 + 80),
-                        margin=dict(l=10, r=60, t=50, b=40),
-                        xaxis=dict(range=[0, 110], title="Ocupación (%)"),
-                    )
-                    st.plotly_chart(fig_ie, width="stretch")
+            # ── Distribución de cupos por hora ────────────────────────
+            st.markdown("##### Distribución de Cupos por Hora del Día")
+            _dff_hora = dff[dff["HORA_NUM"].notna()].copy()
+            _dff_hora["hora_int"] = _dff_hora["HORA_NUM"].astype(int)
+            hora_counts = (
+                _dff_hora.groupby("hora_int", observed=True)
+                .size()
+                .reset_index(name="cupos")
+                .rename(columns={"hora_int": "hora"})
+            )
+            hora_counts["tipo"] = hora_counts["hora"].apply(
+                lambda h: "Extendido (>= 18:00)" if h >= 18 else "Normal"
+            )
+            fig_horas = px.bar(
+                hora_counts, x="hora", y="cupos", color="tipo",
+                color_discrete_map={"Extendido (>= 18:00)": "#1ABC9C", "Normal": "#2E86C1"},
+                labels={"hora": "Hora de Inicio", "cupos": "Cantidad de Cupos", "tipo": "Horario"},
+                title="Cupos por Hora del Día",
+                template="plotly_white", height=360,
+            )
+            fig_horas.add_vline(x=17.5, line_dash="dash", line_color="#E74C3C",
+                                annotation_text="18:00 hrs", annotation_position="top right")
+            fig_horas.update_layout(margin=dict(l=20, r=20, t=50, b=40))
+            st.plotly_chart(fig_horas, width="stretch")
 
-            # ── Serie temporal: ocupación extendida por mes ───────────
+            # ══════════════════════════════════════════════════════════════
+            # ANÁLISIS SEGMENTADO: NORMAL / EXTENDIDO / SÁBADO
+            # ══════════════════════════════════════════════════════════════
+            st.markdown("---")
+            st.markdown("#### Análisis Segmentado: Normal · Extendido · Apertura Sabatina")
+            st.caption(
+                "Comparación diferenciada de los tres componentes horarios: "
+                "**Normal** (Lun-Vie < 18 h), **Extendido** (Lun-Vie >= 18 h) y "
+                "**Apertura Sabatina** (atenciones los días sábado)."
+            )
+
+            from src.kpis import (
+                kpis_horario_segmentado, kpis_por_profesional,
+                kpis_profesional_sabatino, kpis_profesional_extendido,
+                kpis_sabatino_por_mes, kpis_extendido_por_mes,
+                kpis_sabatino_por_instrumento, kpis_extendido_por_instrumento,
+                calc_bloqueo,
+            )
+
+            # Helper: formatear columnas enteras con separador de miles
+            def _fmt_miles(df_disp, cols_int):
+                d = df_disp.copy()
+                for c in cols_int:
+                    if c in d.columns:
+                        d[c] = d[c].apply(lambda x: f"{int(x):,}" if pd.notna(x) else "")
+                return d
+
+            _PROF_RENAME = {
+                "profesional": "Profesional", "instrumento": "Instrumento",
+                "total": "Total Cupos", "citados": "Citados",
+                "disponibles": "Disponibles", "bloqueados": "Bloqueados",
+                "completados": "Completados", "ocupacion": "Ocupación %",
+                "no_show": "No-Show %", "bloqueo": "Bloqueo %",
+                "efectividad": "Efectividad %", "rendimiento": "Rendimiento",
+            }
+            _INT_COLS = ["Total Cupos", "Citados", "Disponibles", "Bloqueados", "Completados"]
+
+            # ── Tabla comparativa de 3 segmentos ─────────────────────
+            df_seg = kpis_horario_segmentado(dff)
+            if not df_seg.empty:
+                st.markdown("##### Tabla Comparativa por Segmento Horario")
+                _seg_display = df_seg.rename(columns={
+                    "segmento": "Segmento", "total": "Total Cupos",
+                    "citados": "Citados", "disponibles": "Disponibles",
+                    "bloqueados": "Bloqueados", "completados": "Completados",
+                    "ocupacion": "Ocupación %", "no_show": "No-Show %",
+                    "bloqueo": "Bloqueo %", "efectividad": "Efectividad %",
+                    "rendimiento": "Rendimiento", "sobrecupo": "Sobrecupo %",
+                })
+                _seg_display = _fmt_miles(_seg_display, _INT_COLS)
+                st.dataframe(_seg_display, use_container_width=True, hide_index=True)
+
+                # Gráfico barras agrupadas por segmento
+                _kpi_cols = ["ocupacion", "no_show", "bloqueo", "efectividad"]
+                _kpi_labels = ["Ocupación %", "No-Show %", "Bloqueo %", "Efectividad %"]
+                rows_radar = []
+                for _, r in df_seg.iterrows():
+                    for kc, kl in zip(_kpi_cols, _kpi_labels):
+                        rows_radar.append({"Segmento": r["segmento"], "KPI": kl, "Valor": r[kc]})
+                df_radar = pd.DataFrame(rows_radar)
+                fig_seg = px.bar(
+                    df_radar, x="KPI", y="Valor", color="Segmento", barmode="group",
+                    color_discrete_map={
+                        "Normal (Lun-Vie <18h)": "#2E86C1",
+                        "Extendido (Lun-Vie \u226518h)": "#1ABC9C",
+                        "Apertura Sabatina": "#E67E22",
+                    },
+                    text_auto=".1f",
+                    title="KPIs por Segmento Horario",
+                    template="plotly_white", height=400,
+                )
+                fig_seg.update_layout(margin=dict(l=20, r=20, t=50, b=40))
+                st.plotly_chart(fig_seg, width="stretch")
+
+            # ── Evolución mensual comparada ───────────────────────────
             if "MES_NUM" in dff.columns and dff["MES_NUM"].nunique() >= 2:
                 st.markdown("##### Evolución Mensual — Horario Extendido vs Normal")
-
                 rows_ts = []
                 for mes, grp in dff.groupby("MES_NUM", observed=True):
                     g_ext  = grp[grp["HORA_NUM"] >= 18]
@@ -1713,7 +1777,6 @@ def page_analisis(dff: pd.DataFrame):
                         "Normal":    calc_ocupacion(g_norm) if not g_norm.empty else 0.0,
                     })
                 df_ts_he = pd.DataFrame(rows_ts).sort_values("mes")
-
                 fig_ts_he = px.line(
                     df_ts_he.melt(id_vars=["mes", "mes_label"],
                                   value_vars=["Extendido", "Normal"],
@@ -1732,93 +1795,13 @@ def page_analisis(dff: pd.DataFrame):
                 fig_ts_he.update_layout(margin=dict(l=20, r=20, t=50, b=40))
                 st.plotly_chart(fig_ts_he, width="stretch")
 
-            # ── Distribución de cupos por hora ────────────────────────
-            st.markdown("##### Distribución de Cupos por Hora del Día")
-            _dff_hora = dff[dff["HORA_NUM"].notna()].copy()
-            _dff_hora["hora_int"] = _dff_hora["HORA_NUM"].astype(int)
-            hora_counts = (
-                _dff_hora.groupby("hora_int", observed=True)
-                .size()
-                .reset_index(name="cupos")
-                .rename(columns={"hora_int": "hora"})
-            )
-            hora_counts["tipo"] = hora_counts["hora"].apply(
-                lambda h: "Extendido (≥ 18:00)" if h >= 18 else "Normal"
-            )
-            fig_horas = px.bar(
-                hora_counts, x="hora", y="cupos", color="tipo",
-                color_discrete_map={"Extendido (≥ 18:00)": "#1ABC9C", "Normal": "#2E86C1"},
-                labels={"hora": "Hora de Inicio", "cupos": "Cantidad de Cupos", "tipo": "Horario"},
-                title="Cupos por Hora del Día",
-                template="plotly_white", height=360,
-            )
-            fig_horas.add_vline(x=17.5, line_dash="dash", line_color="#E74C3C",
-                                annotation_text="18:00 hrs", annotation_position="top right")
-            fig_horas.update_layout(margin=dict(l=20, r=20, t=50, b=40))
-            st.plotly_chart(fig_horas, width="stretch")
-
-            # ══════════════════════════════════════════════════════════════
-            # ANÁLISIS PROFUNDO: SEGMENTACIÓN NORMAL / EXTENDIDO / SÁBADO
-            # ══════════════════════════════════════════════════════════════
-            st.markdown("---")
-            st.markdown("#### Análisis Segmentado: Normal · Extendido · Apertura Sabatina")
-            st.caption(
-                "Comparación diferenciada de los tres componentes horarios: "
-                "**Normal** (Lun-Vie < 18 h), **Extendido** (Lun-Vie ≥ 18 h) y "
-                "**Apertura Sabatina** (atenciones los días sábado)."
-            )
-
-            from src.kpis import (
-                kpis_horario_segmentado, kpis_por_profesional,
-                kpis_profesional_sabatino, kpis_profesional_extendido,
-                kpis_sabatino_por_mes, kpis_extendido_por_mes,
-                kpis_sabatino_por_instrumento, kpis_extendido_por_instrumento,
-                calc_bloqueo,
-            )
-
-            # ── Tabla comparativa de 3 segmentos ─────────────────────
-            df_seg = kpis_horario_segmentado(dff)
-            if not df_seg.empty:
-                st.markdown("##### Tabla Comparativa por Segmento Horario")
-                _seg_display = df_seg.rename(columns={
-                    "segmento": "Segmento", "total": "Total Cupos",
-                    "citados": "Citados", "disponibles": "Disponibles",
-                    "bloqueados": "Bloqueados", "completados": "Completados",
-                    "ocupacion": "Ocupación %", "no_show": "No-Show %",
-                    "bloqueo": "Bloqueo %", "efectividad": "Efectividad %",
-                    "rendimiento": "Rendimiento", "sobrecupo": "Sobrecupo %",
-                })
-                st.dataframe(_seg_display, use_container_width=True, hide_index=True)
-
-                # Gráfico radar-like de barras agrupadas por segmento
-                _kpi_cols = ["ocupacion", "no_show", "bloqueo", "efectividad"]
-                _kpi_labels = ["Ocupación %", "No-Show %", "Bloqueo %", "Efectividad %"]
-                rows_radar = []
-                for _, r in df_seg.iterrows():
-                    for kc, kl in zip(_kpi_cols, _kpi_labels):
-                        rows_radar.append({"Segmento": r["segmento"], "KPI": kl, "Valor": r[kc]})
-                df_radar = pd.DataFrame(rows_radar)
-                fig_seg = px.bar(
-                    df_radar, x="KPI", y="Valor", color="Segmento", barmode="group",
-                    color_discrete_map={
-                        "Normal (Lun-Vie <18h)": "#2E86C1",
-                        "Extendido (Lun-Vie ≥18h)": "#1ABC9C",
-                        "Apertura Sabatina": "#E67E22",
-                    },
-                    text_auto=".1f",
-                    title="KPIs por Segmento Horario",
-                    template="plotly_white", height=400,
-                )
-                fig_seg.update_layout(margin=dict(l=20, r=20, t=50, b=40))
-                st.plotly_chart(fig_seg, width="stretch")
-
             # ══════════════════════════════════════════════════════════════
             # APERTURA SABATINA — análisis dedicado
             # ══════════════════════════════════════════════════════════════
             has_sabado = "APERTURA_SABATINA" in dff.columns and (dff["APERTURA_SABATINA"] == "Sábado").any()
             if has_sabado:
                 st.markdown("---")
-                st.markdown("#### 🗓️ Apertura Sabatina — Análisis Detallado")
+                st.markdown("#### Apertura Sabatina — Análisis Detallado")
                 dff_sab = dff[dff["APERTURA_SABATINA"] == "Sábado"]
                 n_sab = len(dff_sab)
                 ocu_sab = calc_ocupacion(dff_sab) if not dff_sab.empty else 0.0
@@ -1847,17 +1830,9 @@ def page_analisis(dff: pd.DataFrame):
                 df_prof_sab = kpis_profesional_sabatino(dff)
                 if not df_prof_sab.empty:
                     st.markdown("##### Ranking de Profesionales — Apertura Sabatina")
-                    _prof_sab_display = df_prof_sab.rename(columns={
-                        "profesional": "Profesional", "total": "Total Cupos",
-                        "citados": "Citados", "disponibles": "Disponibles",
-                        "bloqueados": "Bloqueados", "completados": "Completados",
-                        "ocupacion": "Ocupación %", "no_show": "No-Show %",
-                        "bloqueo": "Bloqueo %", "efectividad": "Efectividad %",
-                        "rendimiento": "Rendimiento",
-                    })
+                    _prof_sab_display = _fmt_miles(df_prof_sab.rename(columns=_PROF_RENAME), _INT_COLS)
                     st.dataframe(_prof_sab_display, use_container_width=True, hide_index=True)
 
-                    # Gráfico: top 15 profesionales sábado por volumen
                     _top_sab = df_prof_sab.head(15)
                     fig_prof_sab = go.Figure(go.Bar(
                         x=_top_sab["total"],
@@ -1881,13 +1856,13 @@ def page_analisis(dff: pd.DataFrame):
                 df_instr_sab = kpis_sabatino_por_instrumento(dff)
                 if not df_instr_sab.empty:
                     st.markdown("##### Instrumentos en Apertura Sabatina")
-                    _instr_sab_display = df_instr_sab.rename(columns={
+                    _instr_sab_display = _fmt_miles(df_instr_sab.rename(columns={
                         "instrumento": "Instrumento", "total": "Total",
                         "citados": "Citados", "disponibles": "Disp.", "bloqueados": "Bloq.",
                         "completados": "Complet.", "ocupacion": "Ocup.%",
                         "no_show": "NoShow%", "bloqueo": "Bloq.%",
                         "efectividad": "Efect.%", "rendimiento": "Rend.",
-                    })
+                    }), ["Total", "Citados", "Disp.", "Bloq.", "Complet."])
                     st.dataframe(_instr_sab_display, use_container_width=True, hide_index=True)
 
                 # ── Evolución mensual — Sábado ─────────────────────────
@@ -1920,20 +1895,16 @@ def page_analisis(dff: pd.DataFrame):
                     st.plotly_chart(fig_sab_vol, width="stretch")
 
             # ══════════════════════════════════════════════════════════════
-            # RANKING PROFESIONALES — HORARIO EXTENDIDO (Lun-Vie ≥18h)
+            # HORARIO EXTENDIDO LUN-VIE (>=18h) — análisis dedicado
             # ══════════════════════════════════════════════════════════════
             df_prof_ext = kpis_profesional_extendido(dff)
             if not df_prof_ext.empty:
                 st.markdown("---")
-                st.markdown("#### Ranking de Profesionales — Horario Extendido (Lun-Vie ≥ 18 h)")
-                _prof_ext_display = df_prof_ext.rename(columns={
-                    "profesional": "Profesional", "total": "Total Cupos",
-                    "citados": "Citados", "disponibles": "Disponibles",
-                    "bloqueados": "Bloqueados", "completados": "Completados",
-                    "ocupacion": "Ocupación %", "no_show": "No-Show %",
-                    "bloqueo": "Bloqueo %", "efectividad": "Efectividad %",
-                    "rendimiento": "Rendimiento",
-                })
+                st.markdown("#### Horario Extendido (Lun-Vie >= 18 h) — Análisis Detallado")
+
+                # ── Ranking de profesionales — Extendido ───────────────
+                st.markdown("##### Ranking de Profesionales — Horario Extendido")
+                _prof_ext_display = _fmt_miles(df_prof_ext.rename(columns=_PROF_RENAME), _INT_COLS)
                 st.dataframe(_prof_ext_display, use_container_width=True, hide_index=True)
 
                 _top_ext = df_prof_ext.head(15)
@@ -1958,14 +1929,14 @@ def page_analisis(dff: pd.DataFrame):
             # ── Instrumentos — Extendido Lun-Vie ─────────────────────
             df_instr_ext = kpis_extendido_por_instrumento(dff)
             if not df_instr_ext.empty:
-                st.markdown("##### Instrumentos en Horario Extendido (Lun-Vie ≥ 18 h)")
-                _instr_ext_display = df_instr_ext.rename(columns={
+                st.markdown("##### Instrumentos en Horario Extendido (Lun-Vie >= 18 h)")
+                _instr_ext_display = _fmt_miles(df_instr_ext.rename(columns={
                     "instrumento": "Instrumento", "total": "Total",
                     "citados": "Citados", "disponibles": "Disp.", "bloqueados": "Bloq.",
                     "completados": "Complet.", "ocupacion": "Ocup.%",
                     "no_show": "NoShow%", "bloqueo": "Bloq.%",
                     "efectividad": "Efect.%", "rendimiento": "Rend.",
-                })
+                }), ["Total", "Citados", "Disp.", "Bloq.", "Complet."])
                 st.dataframe(_instr_ext_display, use_container_width=True, hide_index=True)
 
             # ── Evolución mensual — Extendido Lun-Vie ─────────────────
@@ -1974,7 +1945,7 @@ def page_analisis(dff: pd.DataFrame):
                 st.markdown("##### Evolución Mensual — Horario Extendido (Lun-Vie)")
                 fig_ext_mes = px.line(
                     df_ext_mes, x="mes_nombre", y="ocupacion", markers=True,
-                    title="Ocupación Extendida por Mes (Lun-Vie ≥ 18 h)",
+                    title="Ocupación Extendida por Mes (Lun-Vie >= 18 h)",
                     labels={"mes_nombre": "Mes", "ocupacion": "Ocupación (%)"},
                     template="plotly_white", height=350,
                 )
@@ -1991,14 +1962,7 @@ def page_analisis(dff: pd.DataFrame):
             if not df_prof_all.empty:
                 st.markdown("---")
                 st.markdown("#### Ranking General de Profesionales (todos los horarios)")
-                _prof_all_display = df_prof_all.head(30).rename(columns={
-                    "profesional": "Profesional", "total": "Total Cupos",
-                    "citados": "Citados", "disponibles": "Disponibles",
-                    "bloqueados": "Bloqueados", "completados": "Completados",
-                    "ocupacion": "Ocupación %", "no_show": "No-Show %",
-                    "bloqueo": "Bloqueo %", "efectividad": "Efectividad %",
-                    "rendimiento": "Rendimiento",
-                })
+                _prof_all_display = _fmt_miles(df_prof_all.head(30).rename(columns=_PROF_RENAME), _INT_COLS)
                 st.dataframe(_prof_all_display, use_container_width=True, hide_index=True)
 
             # ══════════════════════════════════════════════════════════════

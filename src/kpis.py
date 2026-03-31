@@ -517,8 +517,10 @@ def kpis_horario_segmentado(df: pd.DataFrame) -> pd.DataFrame:
     if df.empty:
         return pd.DataFrame()
 
-    sabado = df.get("APERTURA_SABATINA", pd.Series(dtype=str))
-    ext = df.get("HORARIO_EXTENDIDO", pd.Series(dtype=str))
+    has_sab = "APERTURA_SABATINA" in df.columns
+    has_ext = "HORARIO_EXTENDIDO" in df.columns
+    sabado = df["APERTURA_SABATINA"] if has_sab else pd.Series("Lun-Vie", index=df.index)
+    ext = df["HORARIO_EXTENDIDO"] if has_ext else pd.Series("Normal", index=df.index)
 
     masks = {
         "Normal (Lun-Vie <18h)": (sabado == "Lun-Vie") & (ext == "Normal"),
@@ -610,7 +612,7 @@ def kpis_profesional_extendido(df: pd.DataFrame) -> pd.DataFrame:
     if "HORARIO_EXTENDIDO" not in df.columns or "PROFESIONAL" not in df.columns:
         return pd.DataFrame()
 
-    sab = df.get("APERTURA_SABATINA", pd.Series(dtype=str))
+    sab = df["APERTURA_SABATINA"] if "APERTURA_SABATINA" in df.columns else pd.Series("Lun-Vie", index=df.index)
     df_ext = df[(df["HORARIO_EXTENDIDO"] == "Extendido") & (sab == "Lun-Vie")]
     if df_ext.empty:
         return pd.DataFrame()
@@ -658,8 +660,8 @@ def kpis_sabatino_por_mes(df: pd.DataFrame) -> pd.DataFrame:
 @_cache
 def kpis_extendido_por_mes(df: pd.DataFrame) -> pd.DataFrame:
     """Evolución mensual de indicadores para Horario Extendido Lun-Vie."""
-    sab = df.get("APERTURA_SABATINA", pd.Series(dtype=str))
-    ext = df.get("HORARIO_EXTENDIDO", pd.Series(dtype=str))
+    sab = df["APERTURA_SABATINA"] if "APERTURA_SABATINA" in df.columns else pd.Series("Lun-Vie", index=df.index)
+    ext = df["HORARIO_EXTENDIDO"] if "HORARIO_EXTENDIDO" in df.columns else pd.Series("Normal", index=df.index)
     df_ext = df[(ext == "Extendido") & (sab == "Lun-Vie")]
     if df_ext.empty:
         return pd.DataFrame()
@@ -706,8 +708,8 @@ def kpis_sabatino_por_instrumento(df: pd.DataFrame) -> pd.DataFrame:
 @_cache
 def kpis_extendido_por_instrumento(df: pd.DataFrame) -> pd.DataFrame:
     """KPIs por instrumento para Horario Extendido Lun-Vie."""
-    sab = df.get("APERTURA_SABATINA", pd.Series(dtype=str))
-    ext = df.get("HORARIO_EXTENDIDO", pd.Series(dtype=str))
+    sab = df["APERTURA_SABATINA"] if "APERTURA_SABATINA" in df.columns else pd.Series("Lun-Vie", index=df.index)
+    ext = df["HORARIO_EXTENDIDO"] if "HORARIO_EXTENDIDO" in df.columns else pd.Series("Normal", index=df.index)
     df_ext = df[(ext == "Extendido") & (sab == "Lun-Vie")]
     if df_ext.empty:
         return pd.DataFrame()

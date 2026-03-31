@@ -616,6 +616,52 @@ def page_inicio():
                 if "ultima_carga" in df_arch.columns:
                     df_arch["ultima_carga"] = pd.to_datetime(df_arch["ultima_carga"]).dt.strftime("%d/%m/%Y %H:%M")
                 st.dataframe(df_arch, width="stretch", hide_index=True)
+
+                # ── Eliminar archivo individual ─────────────────────────────
+                nombres_arch = [a["archivo"] for a in archivos_bq if a.get("archivo")]
+                if nombres_arch:
+                    col_sel, col_btn = st.columns([3, 1])
+                    with col_sel:
+                        arch_elegido = st.selectbox(
+                            "Seleccionar archivo a eliminar",
+                            options=nombres_arch,
+                            key="sel_arch_delete",
+                            label_visibility="collapsed",
+                        )
+                    with col_btn:
+                        if st.button("🗑️ Eliminar", key="btn_del_arch", use_container_width=True):
+                            st.session_state._confirm_del_arch = arch_elegido
+
+                    if st.session_state.get("_confirm_del_arch"):
+                        arch_conf = st.session_state._confirm_del_arch
+                        reg_count = next(
+                            (a["registros"] for a in archivos_bq if a["archivo"] == arch_conf), 0
+                        )
+                        st.warning(
+                            f"¿Eliminar **{arch_conf}** ({reg_count:,} registros) de BigQuery? "
+                            "Esta acción no se puede deshacer."
+                        )
+                        c1, c2 = st.columns(2)
+                        with c1:
+                            if st.button("✅ Confirmar eliminación", key="btn_confirm_del",
+                                         type="primary", use_container_width=True):
+                                ok, msg = bq.delete_archivo(arch_conf)
+                                st.session_state._confirm_del_arch = None
+                                if ok:
+                                    st.session_state.df = None
+                                    st.session_state.bq_filter_options = {}
+                                    st.session_state.bq_total_registros = 0
+                                    st.cache_data.clear()
+                                    st.toast(msg, icon="✅")
+                                    st.rerun()
+                                else:
+                                    st.error(msg)
+                        with c2:
+                            if st.button("❌ Cancelar", key="btn_cancel_del",
+                                         use_container_width=True):
+                                st.session_state._confirm_del_arch = None
+                                st.rerun()
+
             # ── Descarga completa desde BQ ──────────────────────────────────
             st.markdown("##### 💾 Descargar datos consolidados")
             st.caption("Descarga todos los datos almacenados en BigQuery como CSV.")

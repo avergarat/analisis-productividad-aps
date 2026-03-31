@@ -2395,38 +2395,57 @@ def page_informe_centro(dff: pd.DataFrame):
     # ══════════════════════════════════════════════════════════════════════════
     st.markdown("---")
     st.markdown("### 📥 Descargar Informe")
-    st.markdown("Descarga el informe completo en formato HTML con todos los gráficos embebidos. "
-                "Puedes abrirlo en cualquier navegador e imprimir como PDF (Ctrl+P).")
+    st.markdown("Descarga el informe completo con todos los gráficos embebidos.")
 
-    with st.spinner("Generando informe descargable..."):
-        html_report = _generar_html_informe(
-            centro_sel=centro_sel,
-            rango_meses=rango_meses,
-            n_meses=n_meses,
-            total_registros=total_registros,
-            citados=citados,
-            disponibles=disponibles,
-            bloqueados=bloqueados,
-            atendidos=atendidos,
-            kpis=kpis,
-            df_centro=df_centro,
-            df_inst_c=df_inst_c,
-            df_kpis_ta=df_kpis_ta if not df_kpis_ta.empty else pd.DataFrame(),
-            alertas_centro=alertas_centro,
-            n_verde=n_verde,
-            n_amarillo=n_amarillo,
-            n_rojo=n_rojo,
+    _informe_args = dict(
+        centro_sel=centro_sel,
+        rango_meses=rango_meses,
+        n_meses=n_meses,
+        total_registros=total_registros,
+        citados=citados,
+        disponibles=disponibles,
+        bloqueados=bloqueados,
+        atendidos=atendidos,
+        kpis=kpis,
+        df_centro=df_centro,
+        df_inst_c=df_inst_c,
+        df_kpis_ta=df_kpis_ta if not df_kpis_ta.empty else pd.DataFrame(),
+        alertas_centro=alertas_centro,
+        n_verde=n_verde,
+        n_amarillo=n_amarillo,
+        n_rojo=n_rojo,
+    )
+
+    col_dl1, col_dl2 = st.columns(2)
+
+    with col_dl1:
+        with st.spinner("Generando HTML..."):
+            html_report = _generar_html_informe(**_informe_args)
+        nombre_html = f"Informe_{centro_sel.replace(' ', '_')}_{rango_meses.replace(' ', '_')}.html"
+        st.download_button(
+            label="📄 Descargar HTML",
+            data=html_report.encode("utf-8"),
+            file_name=nombre_html,
+            mime="text/html",
+            type="secondary",
+            use_container_width=True,
         )
 
-    nombre_archivo = f"Informe_{centro_sel.replace(' ', '_')}_{rango_meses.replace(' ', '_')}.html"
-    st.download_button(
-        label="📥 Descargar Informe HTML",
-        data=html_report.encode("utf-8"),
-        file_name=nombre_archivo,
-        mime="text/html",
-        type="primary",
-        use_container_width=True,
-    )
+    with col_dl2:
+        with st.spinner("Generando PDF (puede tardar unos segundos)..."):
+            try:
+                pdf_bytes = _generar_pdf_informe(**_informe_args)
+                nombre_pdf = f"Informe_{centro_sel.replace(' ', '_')}_{rango_meses.replace(' ', '_')}.pdf"
+                st.download_button(
+                    label="📕 Descargar PDF",
+                    data=pdf_bytes,
+                    file_name=nombre_pdf,
+                    mime="application/pdf",
+                    type="primary",
+                    use_container_width=True,
+                )
+            except Exception as e:
+                st.error(f"Error generando PDF: {e}")
 
 
 def _generar_html_informe(
@@ -2802,6 +2821,704 @@ Identifica la composición de la cartera de servicios del centro.</p>
 </html>"""
 
     return html
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  GENERACIÓN DE INFORME PDF
+# ══════════════════════════════════════════════════════════════════════════════
+
+def _generar_pdf_informe(
+    centro_sel, rango_meses, n_meses, total_registros,
+    citados, disponibles, bloqueados, atendidos,
+    kpis, df_centro, df_inst_c, df_kpis_ta,
+    alertas_centro, n_verde, n_amarillo, n_rojo,
+) -> bytes:
+    """Genera informe PDF profesional con portada estilo Canva y gráficos embebidos."""
+    import io
+    import plotly.graph_objects as go
+    from fpdf import FPDF
+    from src.kpis import semaforo
+    from src.charts import (
+        chart_estado_cupos, chart_evolucion_mensual, chart_noshow_vs_umbral,
+        chart_rendimiento_instrumento, chart_sector, chart_tipo_atencion,
+        chart_multi_kpi, chart_heatmap_instrumento_mes,
+    )
+    from datetime import datetime
+
+    fecha_gen = datetime.now().strftime("%d/%m/%Y %H:%M")
+
+    # ── Helper: Plotly fig → PNG bytes ────────────────────────────────────────
+    def _fig_to_png(fig, w=900, h=450):
+        fig.update_layout(width=w, height=h, template="plotly_white")
+        try:
+            return fig.to_image(format="png", scale=2, engine="kaleido")
+        except Exception:
+            return None
+
+    # ── Helper: semáforo ──────────────────────────────────────────────────────
+    def _sem_text(val, kpi):
+        s = semaforo(val, kpi)
+        return {"verde": "Optimo", "amarillo": "Observacion", "rojo": "Critico"}.get(s, "-")
+
+    def _sem_color(val, kpi):
+        s = semaforo(val, kpi)
+        return {"verde": (39, 174, 96), "amarillo": (243, 156, 18), "rojo": (231, 76, 60)}.get(s, (149, 165, 166))
+
+    # ── Colores corporativos ──────────────────────────────────────────────────
+    AZUL_OSCURO = (27, 79, 114)
+    AZUL_MEDIO = (46, 134, 193)
+    AZUL_CLARO = (174, 214, 241)
+    BLANCO = (255, 255, 255)
+    GRIS_TEXTO = (44, 62, 80)
+    GRIS_CLARO = (248, 249, 250)
+    VERDE = (39, 174, 96)
+    AMARILLO = (243, 156, 18)
+    ROJO = (231, 76, 60)
+
+    # ── Clase PDF personalizada ───────────────────────────────────────────────
+    class InformePDF(FPDF):
+        def __init__(self):
+            super().__init__(orientation="P", unit="mm", format="A4")
+            self.set_auto_page_break(auto=True, margin=20)
+            self._is_cover = False
+
+        def header(self):
+            if self._is_cover or self.page_no() == 1:
+                return
+            # Barra superior azul
+            self.set_fill_color(*AZUL_OSCURO)
+            self.rect(0, 0, 210, 12, "F")
+            self.set_font("Helvetica", "B", 7)
+            self.set_text_color(*BLANCO)
+            self.set_xy(10, 3)
+            self.cell(0, 5, f"Informe de Productividad APS  |  {centro_sel}  |  {rango_meses}", align="L")
+            self.set_xy(0, 3)
+            self.cell(200, 5, f"Pag. {self.page_no()}", align="R")
+            # Línea decorativa
+            self.set_draw_color(*AZUL_MEDIO)
+            self.set_line_width(0.5)
+            self.line(10, 13, 200, 13)
+            self.set_y(18)
+
+        def footer(self):
+            if self._is_cover or self.page_no() == 1:
+                return
+            self.set_y(-15)
+            self.set_draw_color(*AZUL_CLARO)
+            self.set_line_width(0.3)
+            self.line(10, self.get_y(), 200, self.get_y())
+            self.set_font("Helvetica", "I", 7)
+            self.set_text_color(150, 150, 150)
+            self.cell(0, 8, f"Servicio de Salud Metropolitano Central  |  Generado: {fecha_gen}", align="C")
+
+        def section_title(self, num, title):
+            self.set_font("Helvetica", "B", 13)
+            self.set_text_color(*AZUL_OSCURO)
+            # Barra lateral decorativa
+            y_start = self.get_y()
+            self.set_fill_color(*AZUL_MEDIO)
+            self.rect(10, y_start, 3, 8, "F")
+            self.set_xy(16, y_start)
+            self.cell(0, 8, f"{num}. {title}")
+            self.ln(12)
+
+        def body_text(self, txt):
+            self.set_font("Helvetica", "", 9)
+            self.set_text_color(*GRIS_TEXTO)
+            self.multi_cell(0, 5, txt)
+            self.ln(2)
+
+        def add_chart(self, png_bytes, w=180):
+            if png_bytes is None:
+                return
+            img_stream = io.BytesIO(png_bytes)
+            x = (210 - w) / 2
+            self.image(img_stream, x=x, w=w)
+            self.ln(5)
+
+        def kpi_card_row(self, cards):
+            """Dibuja tarjetas KPI en fila (max 5)."""
+            n = len(cards)
+            card_w = 36
+            gap = 2
+            total_w = n * card_w + (n - 1) * gap
+            x_start = (210 - total_w) / 2
+            y_start = self.get_y()
+            for i, (val, label) in enumerate(cards):
+                x = x_start + i * (card_w + gap)
+                # Sombra
+                self.set_fill_color(220, 220, 220)
+                self.rounded_rect(x + 0.5, y_start + 0.5, card_w, 22, 2, style="F")
+                # Tarjeta
+                self.set_fill_color(*BLANCO)
+                self.set_draw_color(*AZUL_CLARO)
+                self.rounded_rect(x, y_start, card_w, 22, 2, style="FD")
+                # Barra superior
+                self.set_fill_color(*AZUL_MEDIO)
+                self.rect(x, y_start, card_w, 3, "F")
+                # Valor
+                self.set_font("Helvetica", "B", 12)
+                self.set_text_color(*AZUL_OSCURO)
+                self.set_xy(x, y_start + 4)
+                self.cell(card_w, 7, str(val), align="C")
+                # Label
+                self.set_font("Helvetica", "", 6)
+                self.set_text_color(100, 100, 100)
+                self.set_xy(x, y_start + 12)
+                self.cell(card_w, 5, label, align="C")
+            self.set_y(y_start + 28)
+
+    # ── Crear PDF ─────────────────────────────────────────────────────────────
+    pdf = InformePDF()
+    pdf.set_left_margin(10)
+    pdf.set_right_margin(10)
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # PORTADA (estilo Canva)
+    # ══════════════════════════════════════════════════════════════════════════
+    pdf._is_cover = True
+    pdf.add_page()
+
+    # Fondo degradado simulado (bandas verticales azul oscuro → azul medio)
+    for i in range(297):
+        ratio = i / 297
+        r = int(AZUL_OSCURO[0] + (AZUL_MEDIO[0] - AZUL_OSCURO[0]) * ratio)
+        g = int(AZUL_OSCURO[1] + (AZUL_MEDIO[1] - AZUL_OSCURO[1]) * ratio)
+        b = int(AZUL_OSCURO[2] + (AZUL_MEDIO[2] - AZUL_OSCURO[2]) * ratio)
+        pdf.set_fill_color(r, g, b)
+        pdf.rect(0, i, 210, 1.1, "F")
+
+    # Elementos decorativos
+    # Líneas diagonales sutiles
+    pdf.set_draw_color(255, 255, 255)
+    pdf.set_line_width(0.15)
+    for offset in range(-300, 300, 40):
+        pdf.line(offset, 0, offset + 210, 297)
+
+    # Rectángulo central semi-transparente (marco blanco sutil)
+    pdf.set_fill_color(255, 255, 255)
+    pdf.set_draw_color(255, 255, 255)
+    pdf.set_line_width(0.8)
+    # Marco exterior decorativo
+    pdf.rect(15, 20, 180, 257, "D")
+    pdf.rect(17, 22, 176, 253, "D")
+
+    # Barra decorativa superior
+    pdf.set_fill_color(*AZUL_CLARO)
+    pdf.rect(30, 40, 150, 1.5, "F")
+
+    # Ícono/badge superior
+    pdf.set_fill_color(255, 255, 255)
+    pdf.rounded_rect(80, 30, 50, 18, 3, style="F")
+    pdf.set_font("Helvetica", "B", 9)
+    pdf.set_text_color(*AZUL_OSCURO)
+    pdf.set_xy(80, 33)
+    pdf.cell(50, 5, "INFORME ANALITICO", align="C")
+    pdf.set_font("Helvetica", "", 7)
+    pdf.set_xy(80, 39)
+    pdf.cell(50, 5, "PRODUCTIVIDAD APS", align="C")
+
+    # Título principal
+    pdf.set_font("Helvetica", "B", 28)
+    pdf.set_text_color(*BLANCO)
+    pdf.set_xy(20, 65)
+    pdf.multi_cell(170, 14, "Informe Analitico\nde Productividad", align="C")
+
+    # Línea decorativa
+    pdf.set_fill_color(*AZUL_CLARO)
+    pdf.rect(60, 100, 90, 1, "F")
+
+    # Nombre del centro
+    pdf.set_font("Helvetica", "B", 20)
+    pdf.set_text_color(*BLANCO)
+    pdf.set_xy(20, 110)
+    pdf.multi_cell(170, 10, centro_sel, align="C")
+
+    # Período
+    pdf.set_font("Helvetica", "", 14)
+    pdf.set_text_color(*AZUL_CLARO)
+    pdf.set_xy(20, 140)
+    pdf.cell(170, 8, f"Periodo: {rango_meses}", align="C")
+    pdf.set_xy(20, 150)
+    pdf.cell(170, 8, f"{n_meses} meses evaluados", align="C")
+
+    # Línea decorativa
+    pdf.set_fill_color(*AZUL_CLARO)
+    pdf.rect(75, 165, 60, 0.5, "F")
+
+    # Tarjetas resumen en portada
+    card_data_cover = [
+        (f"{total_registros:,}", "Registros"),
+        (f"{citados:,}", "Citados"),
+        (f"{disponibles:,}", "Disponibles"),
+        (f"{bloqueados:,}", "Bloqueados"),
+        (f"{atendidos:,}", "Atendidos"),
+    ]
+    card_w = 30
+    gap = 4
+    total_cards_w = 5 * card_w + 4 * gap
+    x_start = (210 - total_cards_w) / 2
+    y_cards = 175
+    for i, (val, lbl) in enumerate(card_data_cover):
+        x = x_start + i * (card_w + gap)
+        # Fondo tarjeta con opacidad simulada
+        pdf.set_fill_color(255, 255, 255)
+        pdf.rounded_rect(x, y_cards, card_w, 25, 2, style="F")
+        pdf.set_font("Helvetica", "B", 10)
+        pdf.set_text_color(*AZUL_OSCURO)
+        pdf.set_xy(x, y_cards + 3)
+        pdf.cell(card_w, 7, val, align="C")
+        pdf.set_font("Helvetica", "", 6)
+        pdf.set_text_color(100, 100, 100)
+        pdf.set_xy(x, y_cards + 13)
+        pdf.cell(card_w, 5, lbl, align="C")
+
+    # Semáforo resumen
+    y_sem = 210
+    pdf.set_font("Helvetica", "B", 11)
+    pdf.set_text_color(*BLANCO)
+    pdf.set_xy(20, y_sem)
+    pdf.cell(170, 7, "Estado General de Indicadores", align="C")
+    pdf.ln(10)
+
+    sem_items = [
+        (n_verde, "Optimos", VERDE),
+        (n_amarillo, "En Observacion", AMARILLO),
+        (n_rojo, "Criticos", ROJO),
+    ]
+    box_w = 45
+    gap_s = 8
+    total_s = 3 * box_w + 2 * gap_s
+    x_s = (210 - total_s) / 2
+    for i, (count, label, color) in enumerate(sem_items):
+        x = x_s + i * (box_w + gap_s)
+        pdf.set_fill_color(*color)
+        pdf.rounded_rect(x, y_sem + 12, box_w, 20, 3, style="F")
+        pdf.set_font("Helvetica", "B", 16)
+        pdf.set_text_color(*BLANCO)
+        pdf.set_xy(x, y_sem + 13)
+        pdf.cell(box_w, 10, str(count), align="C")
+        pdf.set_font("Helvetica", "", 8)
+        pdf.set_xy(x, y_sem + 23)
+        pdf.cell(box_w, 6, label, align="C")
+
+    # Pie de portada
+    pdf.set_font("Helvetica", "", 9)
+    pdf.set_text_color(*AZUL_CLARO)
+    pdf.set_xy(20, 255)
+    pdf.cell(170, 5, "Servicio de Salud Metropolitano Central", align="C")
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_xy(20, 262)
+    pdf.cell(170, 5, f"Generado: {fecha_gen}", align="C")
+
+    # Barra decorativa inferior
+    pdf.set_fill_color(*AZUL_CLARO)
+    pdf.rect(30, 255 - 5, 150, 0.5, "F")
+
+    pdf._is_cover = False
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # GENERAR GRÁFICOS PNG
+    # ══════════════════════════════════════════════════════════════════════════
+    charts_png = {}
+
+    fig1 = chart_estado_cupos(df_centro)
+    fig1.update_layout(height=400)
+    charts_png["cupos"] = _fig_to_png(fig1, 850, 400)
+
+    df_meses_c = _kpis_por_mes_centro(df_centro)
+    if not df_meses_c.empty and len(df_meses_c) >= 2:
+        fig2 = chart_evolucion_mensual(df_meses_c, "ocupacion", "Tasa de Ocupacion",
+                                        umbral_ok=65, umbral_alerta=50)
+        charts_png["ocu_mensual"] = _fig_to_png(fig2, 850, 400)
+
+    if not df_inst_c.empty:
+        df_plot = df_inst_c.sort_values("ocupacion")
+        colors_ocu = ["#27AE60" if v >= 65 else "#F39C12" if v >= 50 else "#E74C3C"
+                      for v in df_plot["ocupacion"]]
+        fig3 = go.Figure(go.Bar(
+            x=df_plot["ocupacion"], y=df_plot["instrumento"].str[:30],
+            orientation="h", marker_color=colors_ocu,
+            text=[f"{v:.1f}%" for v in df_plot["ocupacion"]], textposition="outside",
+        ))
+        fig3.add_vline(x=65, line_dash="dash", line_color="#27AE60", annotation_text="Meta 65%")
+        fig3.update_layout(title="Ocupacion por Instrumento", template="plotly_white",
+                           xaxis=dict(title="Ocupacion (%)", range=[0, 105]), yaxis=dict(title=""))
+        h3 = max(400, len(df_plot) * 40 + 100)
+        charts_png["ocu_inst"] = _fig_to_png(fig3, 850, h3)
+
+    if not df_meses_c.empty and len(df_meses_c) >= 2:
+        fig4 = chart_noshow_vs_umbral(df_meses_c)
+        charts_png["noshow"] = _fig_to_png(fig4, 850, 400)
+
+        fig5 = chart_evolucion_mensual(df_meses_c, "bloqueo", "Tasa de Bloqueo",
+                                        umbral_ok=10, umbral_alerta=15)
+        charts_png["bloqueo"] = _fig_to_png(fig5, 850, 400)
+
+        fig6 = chart_evolucion_mensual(df_meses_c, "efectividad", "Efectividad de Cita",
+                                        umbral_ok=88, umbral_alerta=80)
+        charts_png["efectividad"] = _fig_to_png(fig6, 850, 400)
+
+    fig7 = chart_rendimiento_instrumento(df_centro)
+    h7 = max(400, len(df_inst_c) * 40 + 100) if not df_inst_c.empty else 400
+    charts_png["rendimiento"] = _fig_to_png(fig7, 850, h7)
+
+    fig8 = chart_sector(df_centro)
+    charts_png["sector"] = _fig_to_png(fig8, 850, 400)
+
+    fig9 = chart_tipo_atencion(df_centro, top_n=15)
+    charts_png["tipo_atencion"] = _fig_to_png(fig9, 850, 480)
+
+    if not df_meses_c.empty and len(df_meses_c) >= 2:
+        fig10 = chart_multi_kpi(df_meses_c)
+        charts_png["multi_kpi"] = _fig_to_png(fig10, 850, 430)
+
+    if "MES_NUM" in df_centro.columns and "INSTRUMENTO" in df_centro.columns:
+        fig11 = chart_heatmap_instrumento_mes(df_centro)
+        n_i = df_centro["INSTRUMENTO"].nunique()
+        charts_png["heatmap"] = _fig_to_png(fig11, 850, max(450, n_i * 38 + 120))
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # HELPER: tabla genérica
+    # ══════════════════════════════════════════════════════════════════════════
+    def _draw_table(headers, rows, col_widths=None, align_cols=None):
+        """Dibuja una tabla profesional con encabezado azul."""
+        n_cols = len(headers)
+        if col_widths is None:
+            col_widths = [190 / n_cols] * n_cols
+        if align_cols is None:
+            align_cols = ["C"] * n_cols
+
+        # Encabezado
+        pdf.set_fill_color(*AZUL_OSCURO)
+        pdf.set_text_color(*BLANCO)
+        pdf.set_font("Helvetica", "B", 7)
+        for i, h in enumerate(headers):
+            pdf.cell(col_widths[i], 7, h, border=1, align="C", fill=True)
+        pdf.ln()
+
+        # Filas
+        pdf.set_font("Helvetica", "", 7)
+        for row_idx, row in enumerate(rows):
+            bg = GRIS_CLARO if row_idx % 2 == 0 else BLANCO
+            pdf.set_fill_color(*bg)
+            pdf.set_text_color(*GRIS_TEXTO)
+            max_h = 7
+            for i, val in enumerate(row):
+                pdf.cell(col_widths[i], max_h, str(val), border=1, align=align_cols[i], fill=True)
+            pdf.ln()
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # CONTENIDO DEL INFORME
+    # ══════════════════════════════════════════════════════════════════════════
+
+    # ── Sección 1: Resumen Ejecutivo ──────────────────────────────────────────
+    pdf.add_page()
+    pdf.section_title(1, "Resumen Ejecutivo")
+    pdf.body_text(
+        f"El presente informe analiza la productividad del centro {centro_sel} "
+        f"durante el periodo {rango_meses} ({n_meses} meses), abarcando un total de "
+        f"{total_registros:,} registros de cupos programados en IRIS. De estos, "
+        f"{citados:,} corresponden a cupos citados, {disponibles:,} permanecieron disponibles, "
+        f"{bloqueados:,} fueron bloqueados administrativamente y {atendidos:,} registraron atencion efectiva."
+    )
+
+    pdf.kpi_card_row([
+        (f"{total_registros:,}", "Total Registros"),
+        (f"{citados:,}", "Citados"),
+        (f"{disponibles:,}", "Disponibles"),
+        (f"{bloqueados:,}", "Bloqueados"),
+        (f"{atendidos:,}", "Atendidos"),
+    ])
+
+    # ── Sección 2: Semáforo de Indicadores ────────────────────────────────────
+    pdf.section_title(2, "Semaforo de Indicadores")
+    pdf.body_text(
+        "Estado de los 10 indicadores clave del modelo de productividad APS. "
+        "Verde: dentro de meta. Amarillo: en observacion. Rojo: brecha critica."
+    )
+
+    kpi_order = [
+        ("ocupacion", "Tasa de Ocupacion"), ("no_show", "Tasa de No-Show"),
+        ("bloqueo", "Tasa de Bloqueo"), ("efectividad", "Efectividad de Cita"),
+        ("rendimiento", "Rendimiento Promedio"), ("sobrecupo", "Cupos Sobrecupo"),
+        ("cobertura_sectorial", "Cobertura Sectorial"), ("agendamiento_remoto", "Agendamiento Remoto"),
+        ("variacion_mensual", "Variacion Mensual"), ("ocupacion_extendida", "Ocupacion Horario Extendido"),
+    ]
+    sem_headers = ["Estado", "Indicador", "Valor", "Meta", "Alerta", "Diagnostico"]
+    sem_rows = []
+    for key, label in kpi_order:
+        k = kpis.get(key, {})
+        valor = k.get("valor", 0)
+        unidad = k.get("unidad", "%")
+        sem = k.get("semaforo", "gris")
+        icon = {"verde": "OK", "amarillo": "OBS", "rojo": "CRIT"}.get(sem, "-")
+        meta = k.get("umbral_ok", "-")
+        alerta = k.get("umbral_alerta", "-")
+        sem_rows.append([icon, label, f"{valor:.1f}{unidad}", str(meta), str(alerta), _sem_text(valor, key)])
+
+    _draw_table(sem_headers, sem_rows,
+                col_widths=[14, 42, 22, 18, 18, 76],
+                align_cols=["C", "L", "C", "C", "C", "L"])
+
+    # ── Sección 3: Estado de Cupos ────────────────────────────────────────────
+    pdf.add_page()
+    pdf.section_title(3, "Distribucion de Estado de Cupos")
+    pdf.body_text(
+        "Composicion de cupos segun estado final (Citado, Disponible, Bloqueado). "
+        "Muestra que proporcion de la oferta programada fue efectivamente utilizada."
+    )
+    pdf.add_chart(charts_png.get("cupos"))
+
+    # ── Sección 4: Tasa de Ocupación ──────────────────────────────────────────
+    v_ocu = kpis.get("ocupacion", {}).get("valor", 0)
+    pdf.section_title(4, "Analisis de Tasa de Ocupacion")
+    pdf.body_text(
+        f"La Tasa de Ocupacion mide el porcentaje de cupos asignados respecto del total "
+        f"disponible: Citados / (Citados + Disponibles) x 100. El centro registra una "
+        f"ocupacion de {v_ocu:.1f}% ({_sem_text(v_ocu, 'ocupacion')}). Meta >= 65%, alerta < 50%."
+    )
+    if charts_png.get("ocu_mensual"):
+        pdf.add_chart(charts_png["ocu_mensual"])
+
+    if charts_png.get("ocu_inst"):
+        if pdf.get_y() > 160:
+            pdf.add_page()
+        pdf.add_chart(charts_png["ocu_inst"])
+
+    # ── Sección 5: No-Show ────────────────────────────────────────────────────
+    v_ns = kpis.get("no_show", {}).get("valor", 0)
+    pdf.add_page()
+    pdf.section_title(5, "Analisis de Tasa de No-Show")
+    pdf.body_text(
+        f"La Tasa de No-Show representa el porcentaje de pacientes citados que no asistieron: "
+        f"(Citados - Completados) / Citados x 100. El centro presenta un No-Show de "
+        f"{v_ns:.1f}% ({_sem_text(v_ns, 'no_show')}). Meta <= 10%, alerta > 15%."
+    )
+    if charts_png.get("noshow"):
+        pdf.add_chart(charts_png["noshow"])
+
+    # ── Sección 6: Bloqueo ────────────────────────────────────────────────────
+    v_bloq = kpis.get("bloqueo", {}).get("valor", 0)
+    pdf.section_title(6, "Analisis de Tasa de Bloqueo")
+    pdf.body_text(
+        f"La Tasa de Bloqueo mide cupos bloqueados administrativamente: "
+        f"Bloqueados / Total x 100. El centro registra {v_bloq:.1f}% "
+        f"({_sem_text(v_bloq, 'bloqueo')}). Meta <= 10%, alerta > 15%."
+    )
+    if charts_png.get("bloqueo"):
+        pdf.add_chart(charts_png["bloqueo"])
+
+    # ── Sección 7: Efectividad ────────────────────────────────────────────────
+    v_efec = kpis.get("efectividad", {}).get("valor", 0)
+    pdf.add_page()
+    pdf.section_title(7, "Analisis de Efectividad de Cita")
+    pdf.body_text(
+        f"La Efectividad de Cita mide citas completadas exitosamente: "
+        f"Completados / Citados x 100. El centro alcanza {v_efec:.1f}% "
+        f"({_sem_text(v_efec, 'efectividad')}). Meta >= 88%, alerta < 80%."
+    )
+    if charts_png.get("efectividad"):
+        pdf.add_chart(charts_png["efectividad"])
+
+    # ── Sección 8: Rendimiento ────────────────────────────────────────────────
+    v_rend = kpis.get("rendimiento", {}).get("valor", 0)
+    pdf.section_title(8, "Rendimiento Promedio por Instrumento")
+    pdf.body_text(
+        f"El Rendimiento Promedio indica los minutos promedio por atencion: "
+        f"Promedio(RENDIMIENTO). El centro presenta {v_rend:.1f} min/atencion."
+    )
+    if charts_png.get("rendimiento"):
+        if pdf.get_y() > 140:
+            pdf.add_page()
+        pdf.add_chart(charts_png["rendimiento"])
+
+    # ── Sección 9: Sobrecupo ─────────────────────────────────────────────────
+    v_sobre = kpis.get("sobrecupo", {}).get("valor", 0)
+    pdf.add_page()
+    pdf.section_title(9, "Analisis de Cupos Sobrecupo")
+    pdf.body_text(
+        f"El Sobrecupo mide atenciones sobre la capacidad programada: "
+        f"Sobrecupos / Total x 100. El centro registra {v_sobre:.1f}% "
+        f"({_sem_text(v_sobre, 'sobrecupo')}). Meta <= 5%, alerta > 10%."
+    )
+
+    # ── Sección 10: Cobertura Sectorial ───────────────────────────────────────
+    v_cob = kpis.get("cobertura_sectorial", {}).get("valor", 0)
+    pdf.section_title(10, "Cobertura Sectorial")
+    pdf.body_text(
+        f"La Cobertura Sectorial mide registros con sector territorial informado: "
+        f"Con sector / Total x 100. Cobertura: {v_cob:.1f}% "
+        f"({_sem_text(v_cob, 'cobertura_sectorial')}). Meta >= 80%, alerta < 60%."
+    )
+    if charts_png.get("sector"):
+        pdf.add_chart(charts_png["sector"])
+
+    # ── Sección 11: Agendamiento Remoto ───────────────────────────────────────
+    v_ag = kpis.get("agendamiento_remoto", {}).get("valor", 0)
+    pdf.add_page()
+    pdf.section_title(11, "Agendamiento Remoto")
+    pdf.body_text(
+        f"Mide citas gestionadas por canales no presenciales: "
+        f"(Telefonico + Telesalud) / Total x 100. Resultado: {v_ag:.1f}% "
+        f"({_sem_text(v_ag, 'agendamiento_remoto')}). Meta >= 20%, alerta < 5%."
+    )
+
+    # ── Sección 12: Horario Extendido ─────────────────────────────────────────
+    v_ext = kpis.get("ocupacion_extendida", {}).get("valor", 0)
+    pdf.section_title(12, "Ocupacion en Horario Extendido")
+    pdf.body_text(
+        f"Uso de cupos a partir de las 18:00 hrs (jornada extendida): "
+        f"Citados >=18h / (Citados + Disponibles >=18h) x 100. Resultado: {v_ext:.1f}% "
+        f"({_sem_text(v_ext, 'ocupacion_extendida')}). Meta >= 50%, alerta < 30%."
+    )
+
+    # ── Sección 13: Tipo de Atención ──────────────────────────────────────────
+    pdf.add_page()
+    pdf.section_title(13, "Distribucion por Tipo de Atencion")
+    pdf.body_text(
+        "Volumen de cupos por tipo de atencion (Morbilidad, Control, Urgencia, etc.). "
+        "Identifica la composicion de la cartera de servicios del centro."
+    )
+    if charts_png.get("tipo_atencion"):
+        pdf.add_chart(charts_png["tipo_atencion"])
+
+    # Tabla tipo atención
+    if not df_kpis_ta.empty:
+        if pdf.get_y() > 180:
+            pdf.add_page()
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(*AZUL_OSCURO)
+        pdf.cell(0, 7, "Tabla: KPIs por Tipo de Atencion")
+        pdf.ln(8)
+        ta_headers = ["Tipo Atencion", "Total", "Citados", "Disp.", "Bloq.", "Atend.", "Ocup.%", "NoShow%", "Efect.%", "Rend."]
+        ta_rows = []
+        for _, r in df_kpis_ta.iterrows():
+            ta_rows.append([
+                str(r["tipo_atencion"])[:25], f'{r["total"]:,.0f}', f'{r["citados"]:,.0f}',
+                f'{r["disponibles"]:,.0f}', f'{r["bloqueados"]:,.0f}', f'{r["atendidos"]:,.0f}',
+                f'{r["ocupacion"]:.1f}', f'{r["no_show"]:.1f}', f'{r["efectividad"]:.1f}',
+                f'{r["rendimiento"]:.1f}',
+            ])
+        _draw_table(ta_headers, ta_rows,
+                    col_widths=[38, 18, 18, 16, 16, 18, 16, 18, 16, 16],
+                    align_cols=["L", "R", "R", "R", "R", "R", "C", "C", "C", "C"])
+
+    # ── Sección 14: KPIs por Instrumento ──────────────────────────────────────
+    pdf.add_page()
+    pdf.section_title(14, "KPIs por Instrumento / Profesional")
+    pdf.body_text("Resumen de indicadores por profesional del centro.")
+
+    if not df_inst_c.empty:
+        inst_headers = ["Instrumento", "Total", "Citados", "Disp.", "Bloq.", "Atend.", "Ocup.%", "NoShow%", "Efect.%", "Rend."]
+        inst_rows = []
+        for _, r in df_inst_c.iterrows():
+            inst_rows.append([
+                str(r["instrumento"])[:25], f'{r["total"]:,.0f}', f'{r["citados"]:,.0f}',
+                f'{r["disponibles"]:,.0f}', f'{r["bloqueados"]:,.0f}', f'{r["atendidos"]:,.0f}',
+                f'{r["ocupacion"]:.1f}', f'{r["no_show"]:.1f}', f'{r["efectividad"]:.1f}',
+                f'{r["rendimiento"]:.1f}',
+            ])
+        _draw_table(inst_headers, inst_rows,
+                    col_widths=[38, 18, 18, 16, 16, 18, 16, 18, 16, 16],
+                    align_cols=["L", "R", "R", "R", "R", "R", "C", "C", "C", "C"])
+
+    # ── Sección 15: Multi-KPI ─────────────────────────────────────────────────
+    if charts_png.get("multi_kpi"):
+        pdf.add_page()
+        pdf.section_title(15, "Evolucion Conjunta de KPIs Principales")
+        pdf.body_text(
+            "Ocupacion, No-Show y Bloqueo mes a mes. Visualiza la interaccion: un aumento "
+            "de bloqueo tipicamente reduce la ocupacion; un No-Show elevado reduce la efectividad."
+        )
+        pdf.add_chart(charts_png["multi_kpi"])
+
+    # ── Sección 16: Heatmap ───────────────────────────────────────────────────
+    if charts_png.get("heatmap"):
+        pdf.add_page()
+        pdf.section_title(16, "Mapa de Calor: Ocupacion por Instrumento y Mes")
+        pdf.body_text(
+            "Cruza cada instrumento (fila) con cada mes (columna), coloreando segun "
+            "la tasa de ocupacion. Tonos verdes >= 65%, amarillos zona intermedia, rojos criticos."
+        )
+        pdf.add_chart(charts_png["heatmap"])
+
+    # ── Sección 17: Alertas ───────────────────────────────────────────────────
+    pdf.add_page()
+    pdf.section_title(17, "Alertas y Brechas del Centro")
+
+    if not alertas_centro:
+        pdf.set_fill_color(213, 245, 227)
+        pdf.set_draw_color(*VERDE)
+        pdf.set_line_width(0.8)
+        y_a = pdf.get_y()
+        pdf.rect(10, y_a, 190, 12, "FD")
+        pdf.set_font("Helvetica", "B", 9)
+        pdf.set_text_color(*VERDE)
+        pdf.set_xy(14, y_a + 2)
+        pdf.cell(0, 8, "Sin brechas detectadas. Todos los indicadores dentro de umbrales aceptables.")
+        pdf.ln(16)
+    else:
+        for a in alertas_centro:
+            sem_a = a.get("semaforo", "gris")
+            bg_c = (253, 237, 236) if sem_a == "rojo" else (254, 249, 231)
+            brd_c = ROJO if sem_a == "rojo" else AMARILLO
+            pdf.set_fill_color(*bg_c)
+            pdf.set_draw_color(*brd_c)
+            pdf.set_line_width(0.8)
+            y_a = pdf.get_y()
+            if y_a > 265:
+                pdf.add_page()
+                y_a = pdf.get_y()
+            pdf.rect(10, y_a, 190, 12, "FD")
+            pdf.set_font("Helvetica", "B", 8)
+            pdf.set_text_color(*brd_c)
+            pdf.set_xy(14, y_a + 1)
+            tipo = a.get("tipo", "")
+            valor_a = a.get("valor", 0)
+            unidad_a = a.get("unidad", "")
+            desc_a = a.get("descripcion", "")
+            pdf.cell(0, 5, f"{tipo}: {valor_a:.1f} {unidad_a}")
+            pdf.set_font("Helvetica", "", 7)
+            pdf.set_text_color(*GRIS_TEXTO)
+            pdf.set_xy(14, y_a + 6)
+            pdf.cell(0, 5, desc_a[:120])
+            pdf.set_y(y_a + 14)
+
+    # ── Sección 18: Conclusión ────────────────────────────────────────────────
+    pdf.section_title(18, "Conclusion del Informe")
+    pdf.body_text(
+        f"El centro {centro_sel} presenta {n_verde} indicadores en estado optimo, "
+        f"{n_amarillo} en zona de observacion y {n_rojo} en brecha critica "
+        f"durante el periodo analizado ({rango_meses})."
+    )
+    if n_rojo > 0:
+        kpis_rojos = [k.get("nombre", key) for key, k in kpis.items()
+                      if isinstance(k, dict) and k.get("semaforo") == "rojo"]
+        pdf.body_text(f"Indicadores criticos: {', '.join(kpis_rojos)}. Se recomienda intervencion inmediata.")
+    if n_amarillo > 0:
+        kpis_amarillos = [k.get("nombre", key) for key, k in kpis.items()
+                          if isinstance(k, dict) and k.get("semaforo") == "amarillo"]
+        pdf.body_text(f"Indicadores en observacion: {', '.join(kpis_amarillos)}. Se sugiere monitoreo continuo.")
+    if n_rojo == 0 and n_amarillo == 0:
+        pdf.body_text("Todos los indicadores se encuentran dentro de los umbrales. Se recomienda mantener las estrategias actuales.")
+
+    # ── Pie final ─────────────────────────────────────────────────────────────
+    pdf.ln(10)
+    pdf.set_draw_color(*AZUL_MEDIO)
+    pdf.set_line_width(0.5)
+    pdf.line(10, pdf.get_y(), 200, pdf.get_y())
+    pdf.ln(3)
+    pdf.set_font("Helvetica", "I", 8)
+    pdf.set_text_color(150, 150, 150)
+    pdf.cell(0, 5, "Informe generado automaticamente por el Sistema de Analisis de Productividad APS", align="C")
+    pdf.ln(5)
+    pdf.cell(0, 5, f"Servicio de Salud Metropolitano Central  |  {centro_sel}  |  {rango_meses}", align="C")
+    pdf.ln(5)
+    pdf.cell(0, 5, f"Fecha de generacion: {fecha_gen}", align="C")
+
+    # ── Exportar ──────────────────────────────────────────────────────────────
+    return bytes(pdf.output())
 
 
 def _kpis_por_mes_centro(df_centro: pd.DataFrame) -> pd.DataFrame:

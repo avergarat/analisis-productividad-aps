@@ -2637,6 +2637,12 @@ SSMC · Sistema de Análisis de Productividad APS</p>
             hover_parts.append(f"{kl}: {val_real:.1f}{unidad} {sem_icon} ({val_norm:.0f}%)")
         hover_text = f"<b>{centro_name}</b><br>Desempeño: {pct:.0f}% ({clasif_label})<br>" + "<br>".join(hover_parts)
 
+        # Convertir color hex a rgba con transparencia
+        def _hex_to_rgba(hex_color, alpha=0.08):
+            h = hex_color.lstrip("#")
+            r_c, g_c, b_c = int(h[0:2], 16), int(h[2:4], 16), int(h[4:6], 16)
+            return f"rgba({r_c},{g_c},{b_c},{alpha})"
+
         fig_radar.add_trace(go.Scatterpolar(
             r=values_closed,
             theta=labels_closed,
@@ -2645,7 +2651,7 @@ SSMC · Sistema de Análisis de Productividad APS</p>
             marker=dict(size=6, color=color),
             name=f"{short_name} ({pct:.0f}%)",
             fill="toself",
-            fillcolor=color.replace(")", ", 0.08)").replace("rgb", "rgba") if color.startswith("rgb") else color + "14",
+            fillcolor=_hex_to_rgba(color),
             hovertemplate=hover_text + "<extra></extra>",
         ))
 

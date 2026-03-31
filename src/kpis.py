@@ -734,3 +734,63 @@ def _kpis_instr_impl(sub: pd.DataFrame) -> pd.DataFrame:
             "rendimiento": calc_rendimiento(grp),
         })
     return pd.DataFrame(rows).sort_values("total", ascending=False)
+
+
+@_cache
+def detalle_profesional_segmento(df: pd.DataFrame, segmento: str = "todos") -> pd.DataFrame:
+    """
+    Detalle por PROFESIONAL × INSTRUMENTO × TIPO ATENCION con KPIs.
+    segmento: 'sabado', 'extendido', 'todos'.
+    """
+    if "PROFESIONAL" not in df.columns or df.empty:
+        return pd.DataFrame()
+
+    sub = df
+    if segmento == "sabado":
+        if "APERTURA_SABATINA" not in df.columns:
+            return pd.DataFrame()
+        sub = df[df["APERTURA_SABATINA"] == "Sábado"]
+    elif segmento == "extendido":
+        if "HORARIO_EXTENDIDO" not in df.columns:
+            return pd.DataFrame()
+        sab = df["APERTURA_SABATINA"] if "APERTURA_SABATINA" in df.columns else pd.Series("Lun-Vie", index=df.index)
+        sub = df[(df["HORARIO_EXTENDIDO"] == "Extendido") & (sab == "Lun-Vie")]
+
+    if sub.empty:
+        return pd.DataFrame()
+
+    grp_cols = ["PROFESIONAL"]
+    if "INSTRUMENTO" in sub.columns:
+        grp_cols.append("INSTRUMENTO")
+    if "TIPO ATENCION" in sub.columns:
+        grp_cols.append("TIPO ATENCION")
+
+    rows = []
+    for keys, grp in sub.groupby(grp_cols, observed=True):
+        if not isinstance(keys, tuple):
+            keys = (keys,)
+        prof = str(keys[0]).strip()
+        if prof in ("", "Sin profesional", "nan"):
+            continue
+        row = {"profesional": prof}
+        if "INSTRUMENTO" in grp_cols:
+            row["instrumento"] = str(keys[grp_cols.index("INSTRUMENTO")])
+        if "TIPO ATENCION" in grp_cols:
+            row["tipo_atencion"] = str(keys[grp_cols.index("TIPO ATENCION")])
+        citados = int((grp["ESTADO CUPO"] == "CITADO").sum())
+        disponibles = int((grp["ESTADO CUPO"] == "DISPONIBLE").sum())
+        bloqueados = int((grp["ESTADO CUPO"] == "BLOQUEADO").sum())
+        completados = int((grp["ESTADO CITA"] == "Completado").sum()) if "ESTADO CITA" in grp.columns else 0
+        row.update({
+            "total": len(grp),
+            "citados": citados,
+            "disponibles": disponibles,
+            "bloqueados": bloqueados,
+            "completados": completados,
+            "ocupacion": calc_ocupacion(grp),
+            "no_show": calc_no_show(grp),
+            "efectividad": calc_efectividad(grp),
+        })
+        rows.append(row)
+
+    return pd.DataFrame(rows).sort_values("total", ascending=False) if rows else pd.DataFrame()

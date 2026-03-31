@@ -1955,6 +1955,99 @@ def page_analisis(dff: pd.DataFrame):
                 })
                 st.dataframe(_prof_all_display, use_container_width=True, hide_index=True)
 
+            # ══════════════════════════════════════════════════════════════
+            # DETALLE POR PROFESIONAL + INSTRUMENTO + TIPO ATENCIÓN
+            # ══════════════════════════════════════════════════════════════
+            from src.kpis import detalle_profesional_segmento
+
+            st.markdown("---")
+            st.markdown("#### 🔍 Detalle por Profesional, Instrumento y Tipo de Atención")
+            st.caption(
+                "Tablas filtrables que muestran la combinación Profesional × Instrumento × Tipo Atención "
+                "para cada segmento horario. Use los filtros para buscar profesionales específicos."
+            )
+
+            _seg_tab_sab, _seg_tab_ext = st.tabs([
+                "📅 Apertura Sabatina", "🌙 Horario Extendido (Lun-Vie ≥ 18 h)",
+            ])
+
+            # ── Detalle Sabatino ──────────────────────────────────────
+            with _seg_tab_sab:
+                df_det_sab = detalle_profesional_segmento(dff, segmento="sabado")
+                if df_det_sab.empty:
+                    st.info("No hay registros de Apertura Sabatina en los datos filtrados.")
+                else:
+                    # Filtros
+                    _fc1, _fc2, _fc3 = st.columns(3)
+                    _profs_sab = sorted(df_det_sab["profesional"].unique())
+                    _instr_sab = sorted(df_det_sab["instrumento"].unique()) if "instrumento" in df_det_sab.columns else []
+                    _tipos_sab = sorted(df_det_sab["tipo_atencion"].unique()) if "tipo_atencion" in df_det_sab.columns else []
+                    with _fc1:
+                        _sel_prof_s = st.multiselect("Profesional", _profs_sab, key="det_sab_prof")
+                    with _fc2:
+                        _sel_instr_s = st.multiselect("Instrumento", _instr_sab, key="det_sab_instr")
+                    with _fc3:
+                        _sel_tipo_s = st.multiselect("Tipo Atención", _tipos_sab, key="det_sab_tipo")
+
+                    _df_s = df_det_sab.copy()
+                    if _sel_prof_s:
+                        _df_s = _df_s[_df_s["profesional"].isin(_sel_prof_s)]
+                    if _sel_instr_s and "instrumento" in _df_s.columns:
+                        _df_s = _df_s[_df_s["instrumento"].isin(_sel_instr_s)]
+                    if _sel_tipo_s and "tipo_atencion" in _df_s.columns:
+                        _df_s = _df_s[_df_s["tipo_atencion"].isin(_sel_tipo_s)]
+
+                    st.markdown(f"**{len(_df_s):,}** combinaciones · **{_df_s['total'].sum():,}** cupos")
+                    st.dataframe(
+                        _df_s.rename(columns={
+                            "profesional": "Profesional", "instrumento": "Instrumento",
+                            "tipo_atencion": "Tipo Atención", "total": "Total",
+                            "citados": "Citados", "disponibles": "Disp.",
+                            "bloqueados": "Bloq.", "completados": "Complet.",
+                            "ocupacion": "Ocup.%", "no_show": "NoShow%",
+                            "efectividad": "Efect.%",
+                        }),
+                        use_container_width=True, hide_index=True, height=450,
+                    )
+
+            # ── Detalle Extendido ─────────────────────────────────────
+            with _seg_tab_ext:
+                df_det_ext = detalle_profesional_segmento(dff, segmento="extendido")
+                if df_det_ext.empty:
+                    st.info("No hay registros de Horario Extendido (Lun-Vie ≥ 18h) en los datos filtrados.")
+                else:
+                    _fe1, _fe2, _fe3 = st.columns(3)
+                    _profs_ext = sorted(df_det_ext["profesional"].unique())
+                    _instr_ext = sorted(df_det_ext["instrumento"].unique()) if "instrumento" in df_det_ext.columns else []
+                    _tipos_ext = sorted(df_det_ext["tipo_atencion"].unique()) if "tipo_atencion" in df_det_ext.columns else []
+                    with _fe1:
+                        _sel_prof_e = st.multiselect("Profesional", _profs_ext, key="det_ext_prof")
+                    with _fe2:
+                        _sel_instr_e = st.multiselect("Instrumento", _instr_ext, key="det_ext_instr")
+                    with _fe3:
+                        _sel_tipo_e = st.multiselect("Tipo Atención", _tipos_ext, key="det_ext_tipo")
+
+                    _df_e = df_det_ext.copy()
+                    if _sel_prof_e:
+                        _df_e = _df_e[_df_e["profesional"].isin(_sel_prof_e)]
+                    if _sel_instr_e and "instrumento" in _df_e.columns:
+                        _df_e = _df_e[_df_e["instrumento"].isin(_sel_instr_e)]
+                    if _sel_tipo_e and "tipo_atencion" in _df_e.columns:
+                        _df_e = _df_e[_df_e["tipo_atencion"].isin(_sel_tipo_e)]
+
+                    st.markdown(f"**{len(_df_e):,}** combinaciones · **{_df_e['total'].sum():,}** cupos")
+                    st.dataframe(
+                        _df_e.rename(columns={
+                            "profesional": "Profesional", "instrumento": "Instrumento",
+                            "tipo_atencion": "Tipo Atención", "total": "Total",
+                            "citados": "Citados", "disponibles": "Disp.",
+                            "bloqueados": "Bloq.", "completados": "Complet.",
+                            "ocupacion": "Ocup.%", "no_show": "NoShow%",
+                            "efectividad": "Efect.%",
+                        }),
+                        use_container_width=True, hide_index=True, height=450,
+                    )
+
 
 # ─────────────────────────────────────────────────────────────
 # PÁGINA 5: ALERTAS Y BRECHAS

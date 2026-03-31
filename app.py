@@ -298,7 +298,10 @@ def render_sidebar() -> dict:
 
             centros_sel = st.multiselect("Centro de Salud", opts_centros,
                                           default=opts_centros, key="filt_centros")
-            filtros["centros"] = centros_sel if centros_sel else opts_centros
+            # Solo filtrar cuando el usuario restringe la selección;
+            # si están todos seleccionados, no aplicar filtro → preserva NULLs
+            if centros_sel and set(centros_sel) != set(opts_centros):
+                filtros["centros"] = centros_sel
 
             meses_labels = {m: f"{MESES_N.get(int(m), str(m))} ({int(m)})" for m in opts_meses}
             meses_sel_labels = st.multiselect(
@@ -306,19 +309,23 @@ def render_sidebar() -> dict:
                 default=list(meses_labels.values()), key="filt_meses"
             )
             meses_sel = [m for m, lbl in meses_labels.items() if lbl in meses_sel_labels]
-            filtros["meses"] = meses_sel if meses_sel else opts_meses
+            if meses_sel and set(meses_sel) != set(opts_meses):
+                filtros["meses"] = meses_sel
 
             inst_sel = st.multiselect("Instrumento/Profesional", opts_inst,
                                        default=opts_inst, key="filt_inst")
-            filtros["instrumentos"] = inst_sel if inst_sel else opts_inst
+            if inst_sel and set(inst_sel) != set(opts_inst):
+                filtros["instrumentos"] = inst_sel
 
             sect_sel = st.multiselect("Sector Territorial", opts_sectores,
                                        default=opts_sectores, key="filt_sect")
-            filtros["sectores"] = sect_sel if sect_sel else opts_sectores
+            if sect_sel and set(sect_sel) != set(opts_sectores):
+                filtros["sectores"] = sect_sel
 
             tc_sel = st.multiselect("Tipo Cupo", opts_tc,
                                      default=opts_tc, key="filt_tc")
-            filtros["tipo_cupo"] = tc_sel if tc_sel else opts_tc
+            if tc_sel and set(tc_sel) != set(opts_tc):
+                filtros["tipo_cupo"] = tc_sel
 
             st.divider()
 

@@ -12,8 +12,7 @@ PII_COLUMNS = {
     "FECHA DE NACIMIENTO", "TELEFONOS", "DETALLE CUPO", "OBSERVACIONES"
 }
 
-# Sectores territoriales válidos
-VALID_SECTORS = {"VERDE", "LILA", "ROJO", "NO INFORMADO"}
+# Sectores territoriales: se preservan TODOS los valores existentes en los datos
 
 # Columnas requeridas para el análisis (nombres normalizados)
 REQUIRED_COLUMNS = {
@@ -148,10 +147,10 @@ def process_iris_file(file_obj, filename: str = "") -> tuple:
     elif "HORA_NUM" in df.columns:
         pass  # Usar la columna existente solo si no hay HORA INICIO
 
-    # SECTOR: normalizar valores no estándar → NO INFORMADO
+    # SECTOR: preservar todas las categorías existentes, solo rellenar vacíos
     if "SECTOR" in df.columns:
-        df["SECTOR"] = df["SECTOR"].fillna("NO INFORMADO").str.strip().str.upper()
-        df["SECTOR"] = df["SECTOR"].where(df["SECTOR"].isin(VALID_SECTORS), "NO INFORMADO")
+        df["SECTOR"] = df["SECTOR"].fillna("NO INFORMADO").astype(str).str.strip()
+        df.loc[df["SECTOR"].isin(["", "nan", "None"]), "SECTOR"] = "NO INFORMADO"
 
     # Columnas numéricas
     for col in ["RENDIMIENTO", "CUPOS UTILIZADOS", "MES_NUM", "HORA_NUM", "EDAD_ANO"]:

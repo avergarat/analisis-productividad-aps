@@ -383,8 +383,8 @@ def load_filtered(
 ) -> tuple[pd.DataFrame | None, str]:
     """
     Carga desde BigQuery solo las filas que coinciden con los filtros activos.
-    Siempre verifica conteo ANTES de traer datos para proteger la RAM y
-    garantizar que no se trunquen registros.
+    Sin filtros: carga directa (el conteo ya se conoce del startup).
+    Con filtros: verifica COUNT antes para proteger la RAM.
     """
     if not bq_configured():
         return None, "BigQuery no configurado."
@@ -408,24 +408,27 @@ def load_filtered(
         if tipos_cupo:      conds.append(_in_str("tipo_cupo", tipos_cupo))
         where = f"WHERE {' AND '.join(conds)}" if conds else ""
 
-        # Columnas a traer (excluir _cargado_en de origen)
         _sel_cols = ", ".join([name for name, _ in _SCHEMA if name != "_cargado_en"])
 
-        # Verificar conteo para proteger la RAM (con o sin filtros)
-        n = list(client.query(
-            f"SELECT COUNT(*) AS n FROM {_tref()} {where}"
-        ).result())[0].n
-        if n == 0:
-            return None, "Sin datos para los filtros seleccionados."
-        if n > max_rows:
-            return None, (
-                f"La consulta retorna **{n:,} filas** "
-                f"(l\u00edmite de seguridad: {max_rows:,}). "
-                "Reduce los filtros (menos CESFAM o menos meses) y vuelve a cargar."
-            )
+        if conds:
+            # Con filtros activos: verificar conteo para proteger la RAM
+            n = list(client.query(
+                f"SELECT COUNT(*) AS n FROM {_tref()} {where}"
+            ).result())[0].n
+            if n == 0:
+                return None, "Sin datos para los filtros seleccionados."
+            if n > max_rows:
+                return None, (
+                    f"La consulta retorna **{n:,} filas** "
+                    f"(l\u00edmite de seguridad: {max_rows:,}). "
+                    "Reduce los filtros (menos CESFAM o menos meses) y vuelve a cargar."
+                )
 
+        # Carga directa — sin COUNT adicional cuando no hay filtros
         sql = f"SELECT {_sel_cols} FROM {_tref()} {where}"
-        df_bq = client.query(sql).to_dataframe()
+        df_bq = client.query(sql).to_dataframe(
+            create_bqstorage_client=False,
+        )
         if df_bq.empty:
             return None, "Sin datos para los filtros seleccionados."
         n = len(df_bq)

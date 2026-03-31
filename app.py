@@ -3257,15 +3257,8 @@ def _generar_pdf_informe(
     # ══════════════════════════════════════════════════════════════════════════
     # HELPER: tabla genérica
     # ══════════════════════════════════════════════════════════════════════════
-    def _draw_table(headers, rows, col_widths=None, align_cols=None):
-        """Dibuja una tabla profesional con encabezado azul."""
-        n_cols = len(headers)
-        if col_widths is None:
-            col_widths = [190 / n_cols] * n_cols
-        if align_cols is None:
-            align_cols = ["C"] * n_cols
-
-        # Encabezado
+    def _draw_table_header(headers, col_widths):
+        """Dibuja encabezado azul de tabla (reutilizable en saltos de página)."""
         pdf.set_fill_color(*AZUL_OSCURO)
         pdf.set_text_color(*BLANCO)
         pdf.set_font("Helvetica", "B", 7)
@@ -3273,15 +3266,35 @@ def _generar_pdf_informe(
             pdf.cell(col_widths[i], 7, h, border=1, align="C", fill=True)
         pdf.ln()
 
+    def _draw_table(headers, rows, col_widths=None, align_cols=None):
+        """Dibuja una tabla profesional con encabezado azul que se repite en cada página."""
+        n_cols = len(headers)
+        if col_widths is None:
+            col_widths = [190 / n_cols] * n_cols
+        if align_cols is None:
+            align_cols = ["C"] * n_cols
+
+        row_h = 7
+        # Margen inferior de la página (20mm de auto_page_break + algo de holgura)
+        bottom_limit = 297 - 20  # A4 height=297mm, margin=20mm
+
+        # Encabezado inicial
+        _draw_table_header(headers, col_widths)
+
         # Filas
         pdf.set_font("Helvetica", "", 7)
         for row_idx, row in enumerate(rows):
+            # Verificar si queda espacio; si no, salto de página + re-dibujar encabezado
+            if pdf.get_y() + row_h > bottom_limit:
+                pdf.add_page()
+                _draw_table_header(headers, col_widths)
+                pdf.set_font("Helvetica", "", 7)
+
             bg = GRIS_CLARO if row_idx % 2 == 0 else BLANCO
             pdf.set_fill_color(*bg)
             pdf.set_text_color(*GRIS_TEXTO)
-            max_h = 7
             for i, val in enumerate(row):
-                pdf.cell(col_widths[i], max_h, str(val), border=1, align=align_cols[i], fill=True)
+                pdf.cell(col_widths[i], row_h, str(val), border=1, align=align_cols[i], fill=True)
             pdf.ln()
 
     # ══════════════════════════════════════════════════════════════════════════

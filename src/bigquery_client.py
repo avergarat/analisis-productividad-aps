@@ -379,12 +379,12 @@ def load_filtered(
     sectores:       list | None = None,
     tipos_atencion: list | None = None,
     tipos_cupo:     list | None = None,
-    max_rows: int = 1_000_000,
+    max_rows: int = 2_000_000,
 ) -> tuple[pd.DataFrame | None, str]:
     """
     Carga desde BigQuery solo las filas que coinciden con los filtros activos.
-    Sin filtros: carga directa sin COUNT previo.
-    Con filtros: verifica conteo ANTES de traer datos para proteger la RAM.
+    Siempre verifica conteo ANTES de traer datos para proteger la RAM y
+    garantizar que no se trunquen registros.
     """
     if not bq_configured():
         return None, "BigQuery no configurado."
@@ -411,24 +411,20 @@ def load_filtered(
         # Columnas a traer (excluir _cargado_en de origen)
         _sel_cols = ", ".join([name for name, _ in _SCHEMA if name != "_cargado_en"])
 
-        if conds:
-            # Con filtros: verificar conteo primero para no reventar RAM
-            n = list(client.query(
-                f"SELECT COUNT(*) AS n FROM {_tref()} {where}"
-            ).result())[0].n
-            if n == 0:
-                return None, "Sin datos para los filtros seleccionados."
-            if n > max_rows:
-                return None, (
-                    f"La selección contiene **{n:,} filas** "
-                    f"(límite de seguridad: {max_rows:,}). "
-                    "Reduce los filtros (menos CESFAM o menos meses) y vuelve a cargar."
-                )
-            sql = f"SELECT {_sel_cols} FROM {_tref()} {where}"
-        else:
-            # Sin filtros: carga directa con LIMIT, sin COUNT adicional
-            sql = f"SELECT {_sel_cols} FROM {_tref()} LIMIT {max_rows}"
+        # Verificar conteo para proteger la RAM (con o sin filtros)
+        n = list(client.query(
+            f"SELECT COUNT(*) AS n FROM {_tref()} {where}"
+        ).result())[0].n
+        if n == 0:
+            return None, "Sin datos para los filtros seleccionados."
+        if n > max_rows:
+            return None, (
+                f"La consulta retorna **{n:,} filas** "
+                f"(l\u00edmite de seguridad: {max_rows:,}). "
+                "Reduce los filtros (menos CESFAM o menos meses) y vuelve a cargar."
+            )
 
+        sql = f"SELECT {_sel_cols} FROM {_tref()} {where}"
         df_bq = client.query(sql).to_dataframe()
         if df_bq.empty:
             return None, "Sin datos para los filtros seleccionados."

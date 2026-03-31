@@ -1,4 +1,4 @@
-"""
+﻿"""
 Sistema de Análisis de Productividad APS
 Servicio de Salud Metropolitano Central - Chile
 """
@@ -2197,7 +2197,8 @@ def page_informe_centro(dff: pd.DataFrame):
         semaforo, calc_ocupacion, calc_no_show, calc_bloqueo,
         calc_efectividad, calc_rendimiento, calc_sobrecupo,
         calc_cobertura_sectorial, calc_agendamiento_remoto,
-        calc_ocupacion_extendida,
+        calc_ocupacion_extendida, resumen_cumplimiento_centros,
+        KPI_DEFINITIONS,
     )
 
     st.markdown("""
@@ -2214,6 +2215,96 @@ def page_informe_centro(dff: pd.DataFrame):
     if "ESTABLECIMIENTO" not in dff.columns:
         st.warning("Los datos no contienen la columna ESTABLECIMIENTO.")
         return
+
+    # ══════════════════════════════════════════════════════════════════════════
+    # CUADRO RESUMEN: Cumplimiento KPIs de TODOS los centros cargados
+    # ══════════════════════════════════════════════════════════════════════════
+    df_resumen = resumen_cumplimiento_centros(dff)
+    if not df_resumen.empty:
+        st.markdown("---")
+        st.markdown("## 🏥 Resumen de Cumplimiento — Todos los Centros")
+        st.markdown(
+            "Vista comparativa automática de los **10 indicadores clave** para cada "
+            "centro de salud cargado. Semáforo: "
+            "🟢 dentro de meta · 🟡 observación · 🔴 brecha crítica · ⚪ sin umbral."
+        )
+
+        _kpi_cols = [
+            ("ocupacion", "Ocupación"),
+            ("no_show", "No-Show"),
+            ("bloqueo", "Bloqueo"),
+            ("efectividad", "Efectividad"),
+            ("rendimiento", "Rendimiento"),
+            ("sobrecupo", "Sobrecupo"),
+            ("cobertura_sectorial", "Cob. Sectorial"),
+            ("agendamiento_remoto", "Agend. Remoto"),
+            ("variacion_mensual", "Var. Mensual"),
+            ("ocupacion_extendida", "Ocup. Extendida"),
+        ]
+
+        _sem_icon = {"verde": "🟢", "amarillo": "🟡", "rojo": "🔴", "gris": "⚪"}
+        _sem_bg = {
+            "verde": "background-color: #d4edda",
+            "amarillo": "background-color: #fff3cd",
+            "rojo": "background-color: #f8d7da",
+            "gris": "background-color: #e9ecef",
+        }
+
+        # Construir tabla HTML con colores
+        html_rows = []
+        for _, r in df_resumen.iterrows():
+            cells = f"<td style='font-weight:600; white-space:nowrap'>{r['centro']}</td>"
+            cells += f"<td style='text-align:center'>{int(r['total']):,}</td>"
+            for kpi_key, _ in _kpi_cols:
+                val = r[f"{kpi_key}_valor"]
+                sem = r[f"{kpi_key}_semaforo"]
+                icon = _sem_icon.get(sem, "⚪")
+                bg = _sem_bg.get(sem, "")
+                unidad = KPI_DEFINITIONS.get(kpi_key, {}).get("unidad", "")
+                if unidad == "%":
+                    display = f"{val:.1f}%"
+                elif unidad == "min":
+                    display = f"{val:.1f}"
+                elif unidad == "pp":
+                    display = f"{val:.1f}"
+                else:
+                    display = f"{val:.1f}"
+                cells += f"<td style='text-align:center; {bg}'>{icon} {display}</td>"
+            html_rows.append(f"<tr>{cells}</tr>")
+
+        # Encabezados
+        th = "<th style='white-space:nowrap'>Centro</th><th>N</th>"
+        for _, label in _kpi_cols:
+            th += f"<th style='white-space:nowrap; text-align:center'>{label}</th>"
+
+        resumen_html = f"""
+        <div style="overflow-x:auto; margin-bottom:1.5rem;">
+        <table style="border-collapse:collapse; width:100%; font-size:0.85rem; border:1px solid #dee2e6;">
+        <thead><tr style="background:#343a40; color:#fff;">{th}</tr></thead>
+        <tbody>{"".join(html_rows)}</tbody>
+        </table>
+        </div>
+        """
+        st.markdown(resumen_html, unsafe_allow_html=True)
+
+        # Conteo de semáforos por centro
+        n_centros = len(df_resumen)
+        n_verde = sum(
+            1 for _, r in df_resumen.iterrows()
+            for kpi_key, _ in _kpi_cols
+            if r.get(f"{kpi_key}_semaforo") == "verde"
+        )
+        n_rojo = sum(
+            1 for _, r in df_resumen.iterrows()
+            for kpi_key, _ in _kpi_cols
+            if r.get(f"{kpi_key}_semaforo") == "rojo"
+        )
+        total_indicadores = n_centros * len(_kpi_cols)
+        st.caption(
+            f"📊 {n_centros} centros · {total_indicadores} evaluaciones · "
+            f"🟢 {n_verde} en meta · 🔴 {n_rojo} en brecha crítica"
+        )
+        st.markdown("---")
 
     # ── Selector de Centro ────────────────────────────────────────────────────
     centros_disponibles = sorted(dff["ESTABLECIMIENTO"].dropna().unique().tolist())

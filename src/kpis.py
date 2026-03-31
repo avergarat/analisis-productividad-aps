@@ -355,6 +355,48 @@ def kpis_por_centro(df: pd.DataFrame) -> pd.DataFrame:
 
 
 @_cache
+def resumen_cumplimiento_centros(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Calcula los 10 KPIs + semáforo por cada establecimiento.
+    Retorna DataFrame con columnas: centro, y por cada KPI dos columnas:
+    {kpi}_valor y {kpi}_semaforo.
+    """
+    if "ESTABLECIMIENTO" not in df.columns or df.empty:
+        return pd.DataFrame()
+
+    _calcs = {
+        "ocupacion": calc_ocupacion,
+        "no_show": calc_no_show,
+        "bloqueo": calc_bloqueo,
+        "efectividad": calc_efectividad,
+        "rendimiento": calc_rendimiento,
+        "sobrecupo": calc_sobrecupo,
+        "cobertura_sectorial": calc_cobertura_sectorial,
+        "agendamiento_remoto": calc_agendamiento_remoto,
+        "ocupacion_extendida": calc_ocupacion_extendida,
+    }
+
+    rows = []
+    for centro, grp in df.groupby("ESTABLECIMIENTO", observed=True):
+        row = {"centro": centro, "total": len(grp)}
+        for key, fn in _calcs.items():
+            try:
+                valor = fn(grp)
+            except Exception:
+                valor = 0.0
+            row[f"{key}_valor"] = valor
+            row[f"{key}_semaforo"] = semaforo(valor, key)
+
+        # Variación mensual por centro
+        vm = _calc_variacion_mensual(grp)
+        row["variacion_mensual_valor"] = vm["valor"]
+        row["variacion_mensual_semaforo"] = vm["semaforo"]
+        rows.append(row)
+
+    return pd.DataFrame(rows).sort_values("ocupacion_valor", ascending=False)
+
+
+@_cache
 def kpis_instrumento_mes(df: pd.DataFrame, instrumentos: tuple) -> pd.DataFrame:
     """
     KPIs por mes para los instrumentos seleccionados.

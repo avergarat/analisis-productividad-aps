@@ -2567,139 +2567,127 @@ SSMC · Sistema de Análisis de Productividad APS</p>
     # BENCHMARK: Gráfico de dispersión comparativo entre centros
     # ══════════════════════════════════════════════════════════════════════
     st.markdown("---")
-    st.markdown("### 📊 Benchmark Comparativo entre Centros")
+    st.markdown("### 📊 Radar de Cumplimiento — Benchmark entre Centros")
     st.markdown(
-        "Selecciona dos indicadores para los ejes y compara el posicionamiento "
-        "de cada centro. El tamaño de la burbuja refleja el **puntaje de desempeño** global. "
-        "Las líneas punteadas indican los umbrales de meta."
+        "Cada eje del radar representa un indicador normalizado a **% de cumplimiento** "
+        "(100% = meta alcanzada). Cada polígono es un centro de salud. "
+        "La línea punteada verde marca el 100% de meta."
     )
 
     import plotly.graph_objects as go
 
-    _bench_kpis = [(k, l) for k, l in _kpi_cols if k != "rendimiento"]
+    # Normalizar cada KPI a escala 0-100% de cumplimiento respecto a la meta
+    _radar_kpis = [(k, l) for k, l in _kpi_cols if k != "rendimiento"]
+    _radar_labels = [l for _, l in _radar_kpis]
 
-    col_x, col_y = st.columns(2)
-    with col_x:
-        eje_x_sel = st.selectbox(
-            "Eje X", [l for _, l in _bench_kpis],
-            index=0, key="bench_eje_x",
-        )
-    with col_y:
-        default_y = min(3, len(_bench_kpis) - 1)
-        eje_y_sel = st.selectbox(
-            "Eje Y", [l for _, l in _bench_kpis],
-            index=default_y, key="bench_eje_y",
-        )
+    def _normalize_kpi(valor, kpi_key):
+        """Normaliza valor a % de cumplimiento (100 = meta)."""
+        defn = KPI_DEFINITIONS.get(kpi_key, {})
+        umbral_ok = defn.get("umbral_ok")
+        direccion = defn.get("direccion", "mayor_es_mejor")
+        if umbral_ok is None or umbral_ok == 0:
+            return 50.0  # Sin umbral → neutro
+        if direccion == "mayor_es_mejor":
+            return min(150.0, round((valor / umbral_ok) * 100, 1))
+        else:  # menor_es_mejor: cumplir = estar debajo → invertir
+            if valor == 0:
+                return 150.0
+            return min(150.0, round((umbral_ok / valor) * 100, 1))
 
-    _label_to_key = {l: k for k, l in _bench_kpis}
-    kx = _label_to_key[eje_x_sel]
-    ky = _label_to_key[eje_y_sel]
+    # Paleta de colores para centros (distinguibles)
+    _radar_palette = [
+        "#1f77b4", "#ff7f0e", "#2ca02c", "#d62728", "#9467bd",
+        "#8c564b", "#e377c2", "#7f7f7f", "#bcbd22", "#17becf",
+        "#393b79", "#637939", "#8c6d31", "#843c39", "#7b4173",
+        "#5254a3", "#6b6ecf", "#9c9ede", "#e7969c", "#de9ed6",
+    ]
 
-    # Colores por clasificación de desempeño
-    _clasif_colors = {
-        "Destacado": "#28a745",
-        "Satisfactorio": "#17a2b8",
-        "En desarrollo": "#ffc107",
-        "Crítico": "#dc3545",
-    }
+    fig_radar = go.Figure()
 
-    fig_bench = go.Figure()
+    # Línea de meta (100%)
+    fig_radar.add_trace(go.Scatterpolar(
+        r=[100] * len(_radar_kpis) + [100],
+        theta=_radar_labels + [_radar_labels[0]],
+        mode="lines",
+        line=dict(color="#28a745", width=2, dash="dot"),
+        name="Meta (100%)",
+        fill=None,
+        hoverinfo="skip",
+    ))
 
-    for _, r in df_resumen.iterrows():
-        vx = r[f"{kx}_valor"]
-        vy = r[f"{ky}_valor"]
-        pct = float(r["_puntaje_pct"])
-        clasif_label, clasif_color = _clasif(pct)
+    for idx, (_, r) in enumerate(df_resumen.iterrows()):
         centro_name = r["centro"]
-        # Tamaño proporcional al puntaje (min 12, max 50)
-        marker_size = max(12, min(50, pct * 0.5))
+        short_name = centro_name.split("]")[-1].strip() if "]" in centro_name else centro_name
+        pct = float(r["_puntaje_pct"])
+        clasif_label, _ = _clasif(pct)
+        color = _radar_palette[idx % len(_radar_palette)]
 
-        fig_bench.add_trace(go.Scatter(
-            x=[vx], y=[vy],
-            mode="markers+text",
-            marker=dict(
-                size=marker_size,
-                color=clasif_color,
-                opacity=0.85,
-                line=dict(width=1.5, color="#fff"),
-            ),
-            text=[centro_name.split("]")[-1].strip()[:20] if "]" in centro_name else centro_name[:20]],
-            textposition="top center",
-            textfont=dict(size=10),
-            hovertemplate=(
-                f"<b>{centro_name}</b><br>"
-                f"{eje_x_sel}: {vx:.1f}<br>"
-                f"{eje_y_sel}: {vy:.1f}<br>"
-                f"Desempeño: {pct:.0f}% ({clasif_label})<br>"
-                f"<extra></extra>"
-            ),
-            showlegend=False,
+        values = [_normalize_kpi(r[f"{k}_valor"], k) for k, _ in _radar_kpis]
+        # Cerrar el polígono
+        values_closed = values + [values[0]]
+        labels_closed = _radar_labels + [_radar_labels[0]]
+
+        # Texto hover con valores reales
+        hover_parts = []
+        for (kk, kl), val_norm in zip(_radar_kpis, values):
+            val_real = r[f"{kk}_valor"]
+            sem = r[f"{kk}_semaforo"]
+            sem_icon = _sem_icon.get(sem, "⚪")
+            unidad = KPI_DEFINITIONS.get(kk, {}).get("unidad", "")
+            hover_parts.append(f"{kl}: {val_real:.1f}{unidad} {sem_icon} ({val_norm:.0f}%)")
+        hover_text = f"<b>{centro_name}</b><br>Desempeño: {pct:.0f}% ({clasif_label})<br>" + "<br>".join(hover_parts)
+
+        fig_radar.add_trace(go.Scatterpolar(
+            r=values_closed,
+            theta=labels_closed,
+            mode="lines+markers",
+            line=dict(color=color, width=2.5),
+            marker=dict(size=6, color=color),
+            name=f"{short_name} ({pct:.0f}%)",
+            fill="toself",
+            fillcolor=color.replace(")", ", 0.08)").replace("rgb", "rgba") if color.startswith("rgb") else color + "14",
+            hovertemplate=hover_text + "<extra></extra>",
         ))
 
-    # Líneas de umbral (meta)
-    defn_x = KPI_DEFINITIONS.get(kx, {})
-    defn_y = KPI_DEFINITIONS.get(ky, {})
-    umbral_x = defn_x.get("umbral_ok")
-    umbral_y = defn_y.get("umbral_ok")
-    unidad_x = defn_x.get("unidad", "")
-    unidad_y = defn_y.get("unidad", "")
-
-    if umbral_x is not None:
-        fig_bench.add_vline(
-            x=umbral_x, line_dash="dot", line_color="#28a745", line_width=1.5,
-            annotation_text=f"Meta {eje_x_sel}: {umbral_x}{unidad_x}",
-            annotation_position="top",
-            annotation_font_size=10,
-            annotation_font_color="#28a745",
-        )
-    if umbral_y is not None:
-        fig_bench.add_hline(
-            y=umbral_y, line_dash="dot", line_color="#28a745", line_width=1.5,
-            annotation_text=f"Meta {eje_y_sel}: {umbral_y}{unidad_y}",
-            annotation_position="right",
-            annotation_font_size=10,
-            annotation_font_color="#28a745",
-        )
-
-    # Promedios de la red (benchmark)
-    avg_x = df_resumen[f"{kx}_valor"].mean()
-    avg_y = df_resumen[f"{ky}_valor"].mean()
-    fig_bench.add_vline(
-        x=avg_x, line_dash="dash", line_color="#6c757d", line_width=1,
-        annotation_text=f"Promedio: {avg_x:.1f}",
-        annotation_position="bottom",
-        annotation_font_size=9,
-        annotation_font_color="#6c757d",
-    )
-    fig_bench.add_hline(
-        y=avg_y, line_dash="dash", line_color="#6c757d", line_width=1,
-        annotation_text=f"Promedio: {avg_y:.1f}",
-        annotation_position="left",
-        annotation_font_size=9,
-        annotation_font_color="#6c757d",
-    )
-
-    fig_bench.update_layout(
-        xaxis_title=f"{eje_x_sel} ({unidad_x})" if unidad_x else eje_x_sel,
-        yaxis_title=f"{eje_y_sel} ({unidad_y})" if unidad_y else eje_y_sel,
-        height=550,
-        template="plotly_white",
-        margin=dict(t=30, b=60, l=60, r=30),
+    fig_radar.update_layout(
+        polar=dict(
+            radialaxis=dict(
+                visible=True,
+                range=[0, 150],
+                tickvals=[0, 25, 50, 75, 100, 125, 150],
+                ticktext=["0%", "25%", "50%", "75%", "100%", "125%", "150%"],
+                tickfont=dict(size=9),
+                gridcolor="#e9ecef",
+            ),
+            angularaxis=dict(
+                tickfont=dict(size=11, color="#343a40"),
+                gridcolor="#dee2e6",
+            ),
+            bgcolor="#fafafa",
+        ),
+        showlegend=True,
+        legend=dict(
+            font=dict(size=10),
+            orientation="h",
+            yanchor="top",
+            y=-0.15,
+            xanchor="center",
+            x=0.5,
+        ),
+        height=620,
+        margin=dict(t=30, b=80, l=80, r=80),
         font=dict(family="Segoe UI, sans-serif"),
     )
 
-    st.plotly_chart(fig_bench, use_container_width=True)
+    st.plotly_chart(fig_radar, use_container_width=True)
 
-    # Leyenda del gráfico
-    _legend_items = " · ".join(
-        f"<span style='color:{c}; font-weight:700'>●</span> {lab}"
-        for lab, c in _clasif_colors.items()
-    )
     st.markdown(
-        f"<div style='font-size:0.8rem; color:#495057; text-align:center'>"
-        f"Tamaño = puntaje de desempeño · {_legend_items} · "
-        f"<span style='color:#6c757d'>--- Promedio red</span> · "
-        f"<span style='color:#28a745'>··· Meta</span></div>",
+        "<div style='font-size:0.8rem; color:#495057; text-align:center'>"
+        "Cada eje = % de cumplimiento respecto a la meta (100% = meta alcanzada) · "
+        "Valores &gt;100% = superan la meta · "
+        "<span style='color:#28a745; font-weight:700'>···</span> Línea de meta · "
+        "Rendimiento excluido (sin umbral direccional)"
+        "</div>",
         unsafe_allow_html=True,
     )
 

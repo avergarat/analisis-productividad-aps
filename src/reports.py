@@ -66,13 +66,15 @@ def generar_html_informe(
     from src.charts import (
         chart_estado_cupos, chart_evolucion_mensual, chart_noshow_vs_umbral,
         chart_rendimiento_instrumento, chart_sector, chart_tipo_atencion,
-        chart_multi_kpi, chart_heatmap_instrumento_mes,
+        chart_multi_kpi, chart_heatmap_instrumento_mes, chart_heatmap_pivot,
     )
     from src.kpis import (
         kpis_horario_segmentado,
         kpis_profesional_sabatino, kpis_profesional_extendido,
         kpis_sabatino_por_mes, kpis_extendido_por_mes,
         kpis_sabatino_por_instrumento, kpis_extendido_por_instrumento,
+        kpis_instrumento_mes, kpis_tipo_atencion_mes,
+        calc_ocupacion, calc_no_show, calc_efectividad, calc_bloqueo,
     )
 
     plotly_js_code = get_plotlyjs()
@@ -135,7 +137,82 @@ def generar_html_informe(
         n_i = df_centro["INSTRUMENTO"].nunique()
         ch["heatmap"] = _fig_html(chart_heatmap_instrumento_mes(df_centro), 900, max(450, n_i * 38 + 120))
 
-    # ── 3D KPI Surface ──
+    # ── Instrument evolution charts ──
+    _inst_evo_html = ""
+    if not df_inst_c.empty and "MES_NUM" in df_centro.columns and "INSTRUMENTO" in df_centro.columns:
+        top_instruments = tuple(df_inst_c.head(10)["instrumento"].tolist())
+        df_inst_mes = kpis_instrumento_mes(df_centro, top_instruments)
+        if not df_inst_mes.empty and df_inst_mes["mes"].nunique() >= 2:
+            for metric, titulo, color in [("ocupacion", "Ocupacion", "#2E86C1"), ("no_show", "No-Show", "#E74C3C"),
+                                          ("efectividad", "Efectividad", "#27AE60"), ("rendimiento", "Rendimiento", "#8E44AD")]:
+                fig_im = go.Figure()
+                for inst in top_instruments:
+                    d = df_inst_mes[df_inst_mes["instrumento"] == inst]
+                    if not d.empty:
+                        fig_im.add_trace(go.Scatter(
+                            x=d["mes_label"], y=d[metric], mode="lines+markers",
+                            name=str(inst)[:30],
+                            hovertemplate=f"<b>{str(inst)[:30]}</b><br>%{{x}}: %{{y:.1f}}<extra></extra>",
+                        ))
+                suffix = " (%)" if metric != "rendimiento" else " (min)"
+                fig_im.update_layout(title=f"{titulo} por Mes e Instrumento", template="plotly_white",
+                                     xaxis=dict(title="Mes"), yaxis=dict(title=f"{titulo}{suffix}"),
+                                     legend=dict(font=dict(size=9)), height=450, width=900)
+                ch[f"inst_evo_{metric}"] = _fig_html(fig_im, 900, 450)
+
+            # Citados stacked bar
+            fig_cit = go.Figure()
+            for inst in top_instruments:
+                d = df_inst_mes[df_inst_mes["instrumento"] == inst]
+                if not d.empty:
+                    fig_cit.add_trace(go.Bar(x=d["mes_label"], y=d["citados"], name=str(inst)[:30]))
+            fig_cit.update_layout(title="Citados por Mes e Instrumento", template="plotly_white", barmode="stack",
+                                  xaxis=dict(title="Mes"), yaxis=dict(title="Citados"),
+                                  legend=dict(font=dict(size=9)), height=450, width=900)
+            ch["inst_evo_citados"] = _fig_html(fig_cit, 900, 450)
+
+    # ── Tipo atencion evolution charts ──
+    _ta_evo_html = ""
+    if not df_kpis_ta.empty and "MES_NUM" in df_centro.columns and "TIPO ATENCION" in df_centro.columns:
+        top_tipos = tuple(df_kpis_ta.head(10)["tipo_atencion"].tolist())
+        df_ta_mes = kpis_tipo_atencion_mes(df_centro, top_tipos)
+        if not df_ta_mes.empty and df_ta_mes["mes"].nunique() >= 2:
+            for metric, titulo in [("ocupacion", "Ocupacion"), ("no_show", "No-Show"),
+                                   ("efectividad", "Efectividad")]:
+                fig_ta = go.Figure()
+                for tipo in top_tipos:
+                    d = df_ta_mes[df_ta_mes["tipo_atencion"] == tipo]
+                    if not d.empty:
+                        fig_ta.add_trace(go.Scatter(
+                            x=d["mes_nombre"], y=d[metric], mode="lines+markers",
+                            name=str(tipo)[:30],
+                            hovertemplate=f"<b>{str(tipo)[:30]}</b><br>%{{x}}: %{{y:.1f}}%<extra></extra>",
+                        ))
+                fig_ta.update_layout(title=f"{titulo} por Mes y Tipo de Atencion", template="plotly_white",
+                                     xaxis=dict(title="Mes"), yaxis=dict(title=f"{titulo} (%)"),
+                                     legend=dict(font=dict(size=9)), height=450, width=900)
+                ch[f"ta_evo_{metric}"] = _fig_html(fig_ta, 900, 450)
+
+    # ── Additional heatmaps (No-Show, Efectividad, Bloqueo) ──
+    MESES_ES = {1: "Ene", 2: "Feb", 3: "Mar", 4: "Abr", 5: "May", 6: "Jun",
+                7: "Jul", 8: "Ago", 9: "Sep", 10: "Oct", 11: "Nov", 12: "Dic"}
+    if "MES_NUM" in df_centro.columns and "INSTRUMENTO" in df_centro.columns:
+        for metric_key, metric_fn, label, cscale in [
+            ("noshow", calc_no_show, "No-Show", [[0, "#0B5345"], [0.1, "#27AE60"], [0.15, "#F39C12"], [1.0, "#E74C3C"]]),
+            ("efectividad", calc_efectividad, "Efectividad", [[0, "#E74C3C"], [0.8, "#F39C12"], [0.88, "#27AE60"], [1.0, "#0B5345"]]),
+            ("bloqueo", calc_bloqueo, "Bloqueo", [[0, "#0B5345"], [0.1, "#27AE60"], [0.15, "#F39C12"], [1.0, "#E74C3C"]]),
+        ]:
+            pivot_data = {}
+            for (inst, mes), grp in df_centro.groupby(["INSTRUMENTO", "MES_NUM"], observed=True):
+                if inst not in pivot_data:
+                    pivot_data[inst] = {}
+                pivot_data[inst][mes] = metric_fn(grp)
+            if pivot_data:
+                df_piv = pd.DataFrame(pivot_data).T.fillna(0)
+                df_piv = df_piv.reindex(sorted(df_piv.columns), axis=1)
+                df_piv.columns = [MESES_ES.get(c, str(c)) for c in df_piv.columns]
+                fig_hm = chart_heatmap_pivot(df_piv, f"{label} por Instrumento y Mes (%)", f"{label} %", cscale)
+                ch[f"heatmap_{metric_key}"] = _fig_html(fig_hm, 900, max(450, len(df_piv) * 38 + 120))
     _3d_html = ""
     if not df_meses_c.empty and len(df_meses_c) >= 3:
         kpi_cols = ["ocupacion", "no_show", "bloqueo", "efectividad"]
@@ -260,11 +337,13 @@ def generar_html_informe(
     inst_rows_html = ""
     if not df_inst_c.empty:
         for _, r in df_inst_c.iterrows():
+            blq_pct = r["bloqueados"] / r["total"] * 100 if r["total"] > 0 else 0
             inst_rows_html += (
                 f'<tr><td>{r["instrumento"]}</td><td style="text-align:right">{r["total"]:,}</td><td style="text-align:right">{r["citados"]:,}</td>'
                 f'<td style="text-align:right">{r["disponibles"]:,}</td><td style="text-align:right">{r["bloqueados"]:,}</td><td style="text-align:right">{r["completados"]:,}</td>'
                 f'<td style="text-align:center">{_si(r["ocupacion"],"ocupacion")} {r["ocupacion"]:.1f}%</td>'
                 f'<td style="text-align:center">{_si(r["no_show"],"no_show")} {r["no_show"]:.1f}%</td>'
+                f'<td style="text-align:center">{_si(blq_pct,"bloqueo")} {blq_pct:.1f}%</td>'
                 f'<td style="text-align:center">{_si(r["efectividad"],"efectividad")} {r["efectividad"]:.1f}%</td>'
                 f'<td style="text-align:center">{r["rendimiento"]:.1f}</td></tr>\n')
 
@@ -277,8 +356,11 @@ def generar_html_informe(
                 f'<td style="text-align:right">{r["disponibles"]:,}</td><td style="text-align:right">{r["bloqueados"]:,}</td><td style="text-align:right">{r["completados"]:,}</td>'
                 f'<td style="text-align:center">{_si(r["ocupacion"],"ocupacion")} {r["ocupacion"]:.1f}%</td>'
                 f'<td style="text-align:center">{_si(r["no_show"],"no_show")} {r["no_show"]:.1f}%</td>'
+                f'<td style="text-align:center">{_si(r.get("bloqueo",0),"bloqueo")} {r.get("bloqueo",0):.1f}%</td>'
                 f'<td style="text-align:center">{_si(r["efectividad"],"efectividad")} {r["efectividad"]:.1f}%</td>'
-                f'<td style="text-align:center">{r["rendimiento"]:.1f}</td></tr>\n')
+                f'<td style="text-align:center">{r["rendimiento"]:.1f}</td>'
+                f'<td style="text-align:center">{r.get("sobrecupo",0):.1f}%</td>'
+                f'<td style="text-align:center">{r.get("agendamiento_remoto",0):.1f}%</td></tr>\n')
 
     # ── Alertas ──
     alertas_html = ""
@@ -424,7 +506,7 @@ def generar_html_informe(
     <li><a href="#sec13"><span class="toc-num">13</span> Tipo de Atencion</a></li>
     <li><a href="#sec14"><span class="toc-num">14</span> KPIs por Instrumento</a></li>
     <li><a href="#sec15"><span class="toc-num">15</span> Multi-KPI Mensual</a></li>
-    <li><a href="#sec16"><span class="toc-num">16</span> Mapa de Calor</a></li>
+    <li><a href="#sec16"><span class="toc-num">16</span> Mapas de Calor</a></li>
     {"<li><a href='#sec17'><span class='toc-num'>17</span> Visualizacion 3D</a></li>" if _3d_html else ""}
     <li><a href="#sec18"><span class="toc-num">18</span> Alertas y Brechas</a></li>
     <li><a href="#sec19"><span class="toc-num">19</span> Marco Metodologico</a></li>
@@ -585,20 +667,30 @@ def generar_html_informe(
 <div class="section" id="sec13">
   <h2><span class="sec-num">13</span> Distribucion por Tipo de Atencion</h2>
   <div class="chart-container">{ch.get("tipo_atencion", "<p>Sin datos</p>")}</div>
-  {"<h3>KPIs por Tipo de Atencion</h3><table><tr><th>Tipo Atencion</th><th>Total</th><th>Citados</th><th>Disp.</th><th>Bloq.</th><th>Complet.</th><th>Ocupacion</th><th>No-Show</th><th>Efectividad</th><th>Rend.</th></tr>" + ta_rows_html + "</table>" if ta_rows_html else ""}
+  {"<h3>KPIs por Tipo de Atencion</h3><table><tr><th>Tipo Atencion</th><th>Total</th><th>Citados</th><th>Disp.</th><th>Bloq.</th><th>Complet.</th><th>Ocupacion</th><th>No-Show</th><th>Bloqueo</th><th>Efectividad</th><th>Rend.</th><th>Sobrecupo</th><th>Ag. Remoto</th></tr>" + ta_rows_html + "</table>" if ta_rows_html else ""}
+  {"<h3>Evolucion Mensual por Tipo de Atencion</h3>" if "ta_evo_ocupacion" in ch else ""}
+  {"<div class='chart-container'>" + ch["ta_evo_ocupacion"] + "</div>" if "ta_evo_ocupacion" in ch else ""}
+  {"<div class='chart-container'>" + ch["ta_evo_no_show"] + "</div>" if "ta_evo_no_show" in ch else ""}
+  {"<div class='chart-container'>" + ch["ta_evo_efectividad"] + "</div>" if "ta_evo_efectividad" in ch else ""}
 </div>
 
 <!-- SEC 14 -->
 <div class="section" id="sec14">
   <h2><span class="sec-num">14</span> KPIs por Instrumento / Profesional</h2>
-  {"<table><tr><th>Instrumento</th><th>Total</th><th>Citados</th><th>Disp.</th><th>Bloq.</th><th>Complet.</th><th>Ocupacion</th><th>No-Show</th><th>Efectividad</th><th>Rend.</th></tr>" + inst_rows_html + "</table>" if inst_rows_html else "<p>Sin datos.</p>"}
+  {"<table><tr><th>Instrumento</th><th>Total</th><th>Citados</th><th>Disp.</th><th>Bloq.</th><th>Complet.</th><th>Ocupacion</th><th>No-Show</th><th>Bloqueo</th><th>Efectividad</th><th>Rend.</th></tr>" + inst_rows_html + "</table>" if inst_rows_html else "<p>Sin datos.</p>"}
+  {"<h3>Evolucion Mensual por Instrumento</h3>" if "inst_evo_ocupacion" in ch else ""}
+  {"<div class='chart-container'>" + ch["inst_evo_ocupacion"] + "</div>" if "inst_evo_ocupacion" in ch else ""}
+  {"<div class='chart-container'>" + ch["inst_evo_no_show"] + "</div>" if "inst_evo_no_show" in ch else ""}
+  {"<div class='chart-container'>" + ch["inst_evo_efectividad"] + "</div>" if "inst_evo_efectividad" in ch else ""}
+  {"<div class='chart-container'>" + ch["inst_evo_rendimiento"] + "</div>" if "inst_evo_rendimiento" in ch else ""}
+  {"<div class='chart-container'>" + ch["inst_evo_citados"] + "</div>" if "inst_evo_citados" in ch else ""}
 </div>
 
 <!-- SEC 15 -->
 {"<div class='section' id='sec15'><h2><span class='sec-num'>15</span> Evolucion Conjunta de KPIs</h2><p>Ocupacion, No-Show y Bloqueo mes a mes.</p><div class='chart-container'>" + ch["multi_kpi"] + "</div></div>" if "multi_kpi" in ch else "<div class='section' id='sec15'><h2><span class='sec-num'>15</span> Evolucion Conjunta</h2><p>No hay datos suficientes.</p></div>"}
 
 <!-- SEC 16 -->
-{"<div class='section' id='sec16'><h2><span class='sec-num'>16</span> Mapa de Calor: Ocupacion x Instrumento x Mes</h2><div class='chart-container'>" + ch["heatmap"] + "</div></div>" if "heatmap" in ch else "<div class='section' id='sec16'><h2><span class='sec-num'>16</span> Mapa de Calor</h2><p>No hay datos suficientes.</p></div>"}
+{"<div class='section' id='sec16'><h2><span class='sec-num'>16</span> Mapas de Calor: Instrumento x Mes</h2><h3>Ocupacion por Instrumento y Mes</h3><div class='chart-container'>" + ch["heatmap"] + "</div>" + ("<h3>No-Show por Instrumento y Mes</h3><div class='chart-container'>" + ch["heatmap_noshow"] + "</div>" if "heatmap_noshow" in ch else "") + ("<h3>Efectividad por Instrumento y Mes</h3><div class='chart-container'>" + ch["heatmap_efectividad"] + "</div>" if "heatmap_efectividad" in ch else "") + ("<h3>Bloqueo por Instrumento y Mes</h3><div class='chart-container'>" + ch["heatmap_bloqueo"] + "</div>" if "heatmap_bloqueo" in ch else "") + "</div>" if "heatmap" in ch else "<div class='section' id='sec16'><h2><span class='sec-num'>16</span> Mapas de Calor</h2><p>No hay datos suficientes.</p></div>"}
 
 <!-- SEC 17: 3D VISUALIZATIONS -->
 {"<div class='section' id='sec17'><h2><span class='sec-num'>17</span> Visualizacion 3D Interactiva <span class='badge-3d'>3D</span></h2><p>Representaciones tridimensionales de las metricas clave. Arrastre con el mouse para rotar, scroll para zoom.</p><h3>Superficie 3D: Evolucion de KPIs</h3><div class='chart-container'>" + _3d_html + "</div>" + ("<h3>Burbuja 3D: Ocupacion x No-Show x Bloqueo</h3><div class='chart-container'>" + _3d_scatter + "</div>" if _3d_scatter else "") + "</div>" if _3d_html else ""}

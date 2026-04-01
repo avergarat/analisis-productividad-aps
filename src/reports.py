@@ -61,7 +61,7 @@ def generar_html_informe(
     alertas_centro, n_verde, n_amarillo, n_rojo,
     kpis_por_mes_fn=None,
 ) -> str:
-    from plotly.offline import get_plotlyjs_version
+    from plotly.offline import get_plotlyjs
     from src.kpis import semaforo, KPI_DEFINITIONS
     from src.charts import (
         chart_estado_cupos, chart_evolucion_mensual, chart_noshow_vs_umbral,
@@ -75,7 +75,7 @@ def generar_html_informe(
         kpis_sabatino_por_instrumento, kpis_extendido_por_instrumento,
     )
 
-    plotly_js_ver = get_plotlyjs_version()
+    plotly_js_code = get_plotlyjs()
     fecha_gen = datetime.now().strftime("%d/%m/%Y %H:%M")
 
     def _fig_html(fig, w=900, h=450):
@@ -315,7 +315,7 @@ def generar_html_informe(
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Informe Productividad &mdash; {centro_sel}</title>
-<script src="https://cdn.plot.ly/plotly-{plotly_js_ver}.min.js" charset="utf-8"></script>
+<script>{plotly_js_code}</script>
 <style>
   :root {{
     --primary: #1B4F72; --secondary: #2E86C1; --accent: #1ABC9C;

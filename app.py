@@ -293,14 +293,11 @@ def render_sidebar() -> dict:
         else:
             opts_centros = opts_meses = opts_inst = opts_sectores = opts_tc = []
 
-        # Si se acaba de hacer reset, usar defaults vacíos
-        _reset = st.session_state.pop("bq_filters_reset", False)
-
         if opts_centros:
             st.markdown("**Filtros**")
 
             centros_sel = st.multiselect("Centro de Salud", opts_centros,
-                                          default=[] if _reset else opts_centros, key="filt_centros")
+                                          default=opts_centros, key="filt_centros")
             # Solo filtrar cuando el usuario restringe la selección;
             # si están todos seleccionados, no aplicar filtro → preserva NULLs
             if centros_sel and set(centros_sel) != set(opts_centros):
@@ -309,35 +306,39 @@ def render_sidebar() -> dict:
             meses_labels = {m: f"{MESES_N.get(int(m), str(m))} ({int(m)})" for m in opts_meses}
             meses_sel_labels = st.multiselect(
                 "Meses", options=list(meses_labels.values()),
-                default=[] if _reset else list(meses_labels.values()), key="filt_meses"
+                default=list(meses_labels.values()), key="filt_meses"
             )
             meses_sel = [m for m, lbl in meses_labels.items() if lbl in meses_sel_labels]
             if meses_sel and set(meses_sel) != set(opts_meses):
                 filtros["meses"] = meses_sel
 
             inst_sel = st.multiselect("Instrumento/Profesional", opts_inst,
-                                       default=[] if _reset else opts_inst, key="filt_inst")
+                                       default=opts_inst, key="filt_inst")
             if inst_sel and set(inst_sel) != set(opts_inst):
                 filtros["instrumentos"] = inst_sel
 
             sect_sel = st.multiselect("Sector Territorial", opts_sectores,
-                                       default=[] if _reset else opts_sectores, key="filt_sect")
+                                       default=opts_sectores, key="filt_sect")
             if sect_sel and set(sect_sel) != set(opts_sectores):
                 filtros["sectores"] = sect_sel
 
             tc_sel = st.multiselect("Tipo Cupo", opts_tc,
-                                     default=[] if _reset else opts_tc, key="filt_tc")
+                                     default=opts_tc, key="filt_tc")
             if tc_sel and set(tc_sel) != set(opts_tc):
                 filtros["tipo_cupo"] = tc_sel
 
             st.divider()
 
             # ── Botón "Cargar desde BigQuery" (solo si BQ configurado) ───────
+            # Verificar si hay al menos un filtro con selección
+            _hay_seleccion = bool(centros_sel or meses_sel_labels or inst_sel or sect_sel or tc_sel)
+
             if bq.bq_configured() and not has_df():
                 n_total = st.session_state.get("bq_total_registros", 0)
                 st.caption(f"🗄️ **{n_total:,}** registros en BigQuery")
                 if st.button("📥 Cargar datos filtrados", type="primary",
-                             use_container_width=True, key="btn_bq_load"):
+                             use_container_width=True, key="btn_bq_load",
+                             disabled=not _hay_seleccion):
                     with st.spinner("Consultando BigQuery..."):
                         df_bq, msg_bq = bq.load_filtered(
                             centros=filtros.get("centros"),
@@ -362,10 +363,12 @@ def render_sidebar() -> dict:
                     if st.button("🔄 Recargar desde BigQuery", use_container_width=True,
                                  key="btn_bq_reload"):
                         st.session_state.df = None
-                        st.session_state.bq_filters_reset = True
-                        for k in ["filt_centros", "filt_meses", "filt_inst", "filt_sect", "filt_tc"]:
-                            if k in st.session_state:
-                                del st.session_state[k]
+                        # Forzar filtros vacíos asignando [] a las keys de los widgets
+                        st.session_state["filt_centros"] = []
+                        st.session_state["filt_meses"] = []
+                        st.session_state["filt_inst"] = []
+                        st.session_state["filt_sect"] = []
+                        st.session_state["filt_tc"] = []
                         st.rerun()
 
             if st.session_state.demo_loaded:

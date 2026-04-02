@@ -330,15 +330,12 @@ def render_sidebar() -> dict:
             st.divider()
 
             # ── Botón "Cargar desde BigQuery" (solo si BQ configurado) ───────
-            # Verificar si hay al menos un filtro con selección
-            _hay_seleccion = bool(centros_sel or meses_sel_labels or inst_sel or sect_sel or tc_sel)
-
             if bq.bq_configured() and not has_df():
                 n_total = st.session_state.get("bq_total_registros", 0)
                 st.caption(f"🗄️ **{n_total:,}** registros en BigQuery")
                 if st.button("📥 Cargar datos filtrados", type="primary",
                              use_container_width=True, key="btn_bq_load",
-                             disabled=not _hay_seleccion):
+                             disabled=not bool(centros_sel)):
                     with st.spinner("Consultando BigQuery..."):
                         df_bq, msg_bq = bq.load_filtered(
                             centros=filtros.get("centros"),
